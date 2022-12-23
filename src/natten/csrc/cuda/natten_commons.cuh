@@ -98,10 +98,10 @@ inline __host__ __device__ int get_pb_start(const int index, const int length, c
 
 #define CHECK_KERNELSIZE(NAME, kernel_size) TORCH_CHECK( \
         kernel_size == 3 || kernel_size == 5 || kernel_size == 7 || \
-        kernel_size == 9 || kernel_size == 11 || kernel_size == 13 \
-        kernel_size == 15 || kernel_size == 17 || kernel_size == 19 \
-        kernel_size == 21 || kernel_size == 23 || kernel_size == 25 \
-        kernel_size == 27 || kernel_size == 29 || kernel_size == 31 \
+        kernel_size == 9 || kernel_size == 11 || kernel_size == 13 || \
+        kernel_size == 15 || kernel_size == 17 || kernel_size == 19 || \
+        kernel_size == 21 || kernel_size == 23 || kernel_size == 25 || \
+        kernel_size == 27 || kernel_size == 29 || kernel_size == 31 || \
         kernel_size == 33 || kernel_size == 35, \
         NAME, " does not support kernel size ", kernel_size)
 
