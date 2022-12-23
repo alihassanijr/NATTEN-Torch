@@ -98,7 +98,11 @@ inline __host__ __device__ int get_pb_start(const int index, const int length, c
 
 #define CHECK_KERNELSIZE(NAME, kernel_size) TORCH_CHECK( \
         kernel_size == 3 || kernel_size == 5 || kernel_size == 7 || \
-        kernel_size == 9 || kernel_size == 11 || kernel_size == 13, \
+        kernel_size == 9 || kernel_size == 11 || kernel_size == 13 \
+        kernel_size == 15 || kernel_size == 17 || kernel_size == 19 \
+        kernel_size == 21 || kernel_size == 23 || kernel_size == 25 \
+        kernel_size == 27 || kernel_size == 29 || kernel_size == 31 \
+        kernel_size == 33 || kernel_size == 35, \
         NAME, " does not support kernel size ", kernel_size)
 
 // First number is the kernel size itself, second is floor(kernel_size / 2) aka neighborhood radius.
@@ -122,6 +126,39 @@ inline __host__ __device__ int get_pb_start(const int index, const int length, c
             break;                                                                                   \
         case 13:                                                                                     \
             _IN_LAUNCH_DNA_KNS(13, 6, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);         \
+            break;                                                                                   \
+        case 15:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(15, 7, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);         \
+            break;                                                                                   \
+        case 17:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(17, 8, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);         \
+            break;                                                                                   \
+        case 19:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(19, 9, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);         \
+            break;                                                                                   \
+        case 21:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(21, 10, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
+            break;                                                                                   \
+        case 23:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(23, 11, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
+            break;                                                                                   \
+        case 25:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(25, 12, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
+            break;                                                                                   \
+        case 27:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(27, 13, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
+            break;                                                                                   \
+        case 29:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(29, 14, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
+            break;                                                                                   \
+        case 31:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(31, 15, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
+            break;                                                                                   \
+        case 33:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(33, 16, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
+            break;                                                                                   \
+        case 35:                                                                                     \
+            _IN_LAUNCH_DNA_KNS(15, 17, dilation, NAME, BLK, TPB, SMEM, CSTREAM, __VA_ARGS__);        \
             break;                                                                                   \
         default:                                                                                     \
             TORCH_INTERNAL_ASSERT(false);                                                            \
