@@ -7,6 +7,16 @@ LICENSE file in the root directory of this source tree.
 #include <torch/extension.h>
 #include <vector>
 
+// Borrowed from Xformers
+// https://github.com/facebookresearch/xformers
+#if defined(_WIN32)
+#include <Python.h>
+PyMODINIT_FUNC PyInit__C(void) {
+  // No need to do anything.
+  return NULL;
+}
+#endif // defined(_WIN32)
+
 namespace natten {
 
 // CPU forward declarations
