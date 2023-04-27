@@ -46,9 +46,9 @@
 namespace natten {
 
 template<class scalar_t>
-using Tensor3D = typename torch::PackedTensorAccessor32<scalar_t,3,torch::DefaultPtrTraits>;
+using Tensor3D = typename torch::PackedTensorAccessor64<scalar_t,3,torch::DefaultPtrTraits>;
 template<class scalar_t>
-using Tensor5D = typename torch::PackedTensorAccessor32<scalar_t,5,torch::DefaultPtrTraits>;
+using Tensor5D = typename torch::PackedTensorAccessor64<scalar_t,5,torch::DefaultPtrTraits>;
 
 template <int KERNEL_SIZE, int NEIGHBORHOOD_SIZE, int DILATION, typename scalar_t>
 __global__ void pointwise_neighborhood_2d_bias_fp16( // QK

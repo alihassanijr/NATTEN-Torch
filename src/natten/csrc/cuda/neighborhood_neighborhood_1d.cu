@@ -41,7 +41,7 @@
 namespace natten {
 
 template<class scalar_t>
-using Tensor4D = typename torch::PackedTensorAccessor32<scalar_t,4,torch::DefaultPtrTraits>;
+using Tensor4D = typename torch::PackedTensorAccessor64<scalar_t,4,torch::DefaultPtrTraits>;
 
 template <int KS, int NS, int DILATION, typename scalar_t>
 __global__ void neighborhood_neighborhood_1d(           // AV     / Q-grad

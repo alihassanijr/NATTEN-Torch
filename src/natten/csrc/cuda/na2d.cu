@@ -85,11 +85,11 @@ torch::Tensor natten2dqkrpb_cuda_forward(
             (zsize + BATCHTHREADS - 1) / BATCHTHREADS);
     const dim3 threads(PIXELTHREADS, KERNELTHREADS, BATCHTHREADS);
     AT_DISPATCH_FLOATING_TYPES(query.scalar_type(), "natten2dqkrpb_cuda_forward", ([&] {
-        const auto query_a = query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto key_a = key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto query_a = query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto key_a = key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (rpb.has_value()) {
-            const auto rpb_a = rpb.value().packed_accessor32<scalar_t,3,torch::DefaultPtrTraits>();
+            const auto rpb_a = rpb.value().packed_accessor64<scalar_t,3,torch::DefaultPtrTraits>();
             LAUNCH_DNA_KNS(kernel_size, dilation, 
                     pointwise_neighborhood_2d_bias, 
                     blocks, threads, 0, stream, 
@@ -137,11 +137,11 @@ torch::Tensor natten2dqkrpb_cuda_forward_fp16(
             (zsize + BATCHTHREADS - 1) / BATCHTHREADS);
     const dim3 threads(PIXELTHREADS, KERNELTHREADS, BATCHTHREADS);
     AT_DISPATCH_HALF_TYPES(at::kHalf, query.scalar_type(), "natten2dqkrpb_cuda_forward_fp16", ([&] {
-        const auto query_a = query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto key_a = key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto query_a = query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto key_a = key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (rpb.has_value()) {
-            const auto rpb_a = rpb.value().packed_accessor32<scalar_t,3,torch::DefaultPtrTraits>();
+            const auto rpb_a = rpb.value().packed_accessor64<scalar_t,3,torch::DefaultPtrTraits>();
             LAUNCH_DNA_KNS(kernel_size, dilation, 
                     pointwise_neighborhood_2d_bias_fp16, 
                     blocks, threads, 0, stream, 
@@ -226,11 +226,11 @@ torch::Tensor natten2dqkrpb_cuda_forward_tiled_32(
             (zsize + BATCHTHREADS - 1) / BATCHTHREADS);
     const dim3 threads(XTHREADS, YTHREADS, BATCHTHREADS);
     AT_DISPATCH_FLOATING_TYPES(query.scalar_type(), "natten2dqkrpb_cuda_forward_fp32_tiled_32", ([&] {
-        const auto query_a = query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto key_a = key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto query_a = query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto key_a = key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (rpb.has_value()) {
-            const auto rpb_a = rpb.value().packed_accessor32<scalar_t,3,torch::DefaultPtrTraits>();
+            const auto rpb_a = rpb.value().packed_accessor64<scalar_t,3,torch::DefaultPtrTraits>();
             if (kernel_size == KERNEL_SIZE_7)
                 LAUNCH_DNA_KNS_TILED79(TILE_7, KTILE_7, KERNEL_SIZE_7, NEIGHBORHOOD_SIZE_7, dilation,
                         pointwise_neighborhood_2d_bias_7x7_9x9_32, 
@@ -382,11 +382,11 @@ torch::Tensor natten2dqkrpb_cuda_forward_fp16_tiled_32(
             (zsize + BATCHTHREADS - 1) / BATCHTHREADS);
     const dim3 threads(XTHREADS, YTHREADS, BATCHTHREADS);
     AT_DISPATCH_HALF_TYPES(at::kHalf, query.scalar_type(), "natten2dqkrpb_cuda_forward_fp16_tiled_32", ([&] {
-        const auto query_a = query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto key_a = key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto query_a = query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto key_a = key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (rpb.has_value()) {
-            const auto rpb_a = rpb.value().packed_accessor32<scalar_t,3,torch::DefaultPtrTraits>();
+            const auto rpb_a = rpb.value().packed_accessor64<scalar_t,3,torch::DefaultPtrTraits>();
             if (kernel_size == KERNEL_SIZE_7)
                 LAUNCH_DNA_KNS_TILED79(TILE_7, KTILE_7, KERNEL_SIZE_7, NEIGHBORHOOD_SIZE_7, dilation,
                         pointwise_neighborhood_2d_bias_fp16_7x7_9x9_32, 
@@ -506,13 +506,13 @@ std::vector<torch::Tensor> natten2dqkrpb_cuda_backward(
     dim3 blockk(CUDA_NUM_THREADS_K);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_FLOATING_TYPES(d_query.scalar_type(), "natten2dqkrpb_backward_cuda", ([&] {
-        const auto d_attn_a = d_attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto query_a = query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto key_a = key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_query_a = d_query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_key_a = d_key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto d_attn_a = d_attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto query_a = query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto key_a = key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_query_a = d_query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_key_a = d_key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (biasEnabled) {
-            auto d_rpb_a = d_rpb.packed_accessor32<scalar_t,3,torch::DefaultPtrTraits>();
+            auto d_rpb_a = d_rpb.packed_accessor64<scalar_t,3,torch::DefaultPtrTraits>();
             LAUNCH_DNA_KNS(kernel_size, dilation, 
                     rel_pos_bias_gradient_2d, 
                     grid_rpb, blockr, 0, stream,
@@ -571,13 +571,13 @@ std::vector<torch::Tensor> natten2dqkrpb_cuda_backward_fp16(
     dim3 blockk(CUDA_NUM_THREADS_K16);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_HALF_TYPES(at::kHalf, d_query.scalar_type(), "natten2dqkrpb_backward_cuda_fp16", ([&] {
-        const auto d_attn_a = d_attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto query_a = query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto key_a = key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_query_a = d_query.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_key_a = d_key.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto d_attn_a = d_attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto query_a = query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto key_a = key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_query_a = d_query.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_key_a = d_key.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (biasEnabled) {
-            auto d_rpb_a = d_rpb.packed_accessor32<scalar_t,3,torch::DefaultPtrTraits>();
+            auto d_rpb_a = d_rpb.packed_accessor64<scalar_t,3,torch::DefaultPtrTraits>();
             LAUNCH_DNA_KNS(kernel_size, dilation, 
                     rel_pos_bias_gradient_2d_fp16, 
                     grid_rpb, blockr, 0, stream,
@@ -620,9 +620,9 @@ torch::Tensor natten2dav_cuda_forward(
     dim3 block(CUDA_NUM_THREADS_F);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_FLOATING_TYPES(value.scalar_type(), "natten2dav_forward_cuda", ([&] {
-        const auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto value_a = value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto out_a = out.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto value_a = value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto out_a = out.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         LAUNCH_DNA_KNS(
                 kernel_size, dilation, 
                 neighborhood_neighborhood_2d, 
@@ -656,9 +656,9 @@ torch::Tensor natten2dav_cuda_forward_fp16(
     dim3 block(CUDA_NUM_THREADS_FP16);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_HALF_TYPES(at::kHalf, value.scalar_type(), "natten2dav_forward_cuda_fp16", ([&] {
-        const auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto value_a = value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto out_a = out.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto value_a = value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto out_a = out.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         LAUNCH_DNA_KNS(kernel_size, dilation, 
                 neighborhood_neighborhood_2d_fp16, 
                 grid, block, 0, stream, 
@@ -742,11 +742,11 @@ std::vector<torch::Tensor> natten2dav_cuda_backward_tiled_32(
     dim3 block(CUDA_NUM_THREADS_V);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_FLOATING_TYPES(d_attn.scalar_type(), "natten2dav_cuda_backward_tiled_32", ([&] {
-        auto d_attn_a = d_attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_value_a = d_value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto d_out_a = d_out.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto value_a = value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_attn_a = d_attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_value_a = d_value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto d_out_a = d_out.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto value_a = value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (kernel_size == KERNEL_SIZE_7)
         {
             LAUNCH_DNA_KNS_TILED79(TILE_7, KTILE_7, KERNEL_SIZE_7, NEIGHBORHOOD_SIZE_7, dilation,
@@ -898,11 +898,11 @@ std::vector<torch::Tensor> natten2dav_cuda_backward_fp16_tiled_32(
     dim3 block(CUDA_NUM_THREADS_V16);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_HALF_TYPES(at::kHalf, d_attn.scalar_type(), "natten2dav_cuda_backward_fp16_tiled_32", ([&] {
-        auto d_attn_a = d_attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_value_a = d_value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto d_out_a = d_out.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto value_a = value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_attn_a = d_attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_value_a = d_value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto d_out_a = d_out.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto value_a = value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         if (kernel_size == KERNEL_SIZE_7){
             LAUNCH_DNA_KNS_TILED79(TILE_7, KTILE_7, KERNEL_SIZE_7, NEIGHBORHOOD_SIZE_7, dilation,
                     pointwise_neighborhood_2d_fp16_7x7_9x9_32, 
@@ -1013,11 +1013,11 @@ std::vector<torch::Tensor> natten2dav_cuda_backward(
     dim3 block(CUDA_NUM_THREADS);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_FLOATING_TYPES(d_attn.scalar_type(), "natten2dav_backward_cuda", ([&] {
-        auto d_attn_a = d_attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_value_a = d_value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto d_out_a = d_out.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto value_a = value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_attn_a = d_attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_value_a = d_value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto d_out_a = d_out.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto value_a = value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         LAUNCH_DNA_KNS(kernel_size, dilation, 
                 pointwise_neighborhood_2d, 
                 attn_blocks, attn_threads, 0, stream, 
@@ -1066,11 +1066,11 @@ std::vector<torch::Tensor> natten2dav_cuda_backward_fp16(
     dim3 block(CUDA_NUM_THREADS);
     const auto stream = c10::cuda::getCurrentCUDAStream();
     AT_DISPATCH_HALF_TYPES(at::kHalf, d_attn.scalar_type(), "natten2dav_backward_cuda_fp16", ([&] {
-        auto d_attn_a = d_attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        auto d_value_a = d_value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto d_out_a = d_out.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto value_a = value.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
-        const auto attn_a = attn.packed_accessor32<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_attn_a = d_attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        auto d_value_a = d_value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto d_out_a = d_out.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto value_a = value.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
+        const auto attn_a = attn.packed_accessor64<scalar_t,5,torch::DefaultPtrTraits>();
         LAUNCH_DNA_KNS(kernel_size, dilation, 
                 pointwise_neighborhood_2d_fp16, 
                 attn_blocks, attn_threads, 0, stream, 

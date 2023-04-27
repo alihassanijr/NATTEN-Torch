@@ -41,8 +41,8 @@ namespace natten {
 
 template <int KERNEL_SIZE, int NEIGHBORHOOD_SIZE, int DILATION, typename scalar_t>
 __global__ void rel_pos_bias_gradient_2d(
-    torch::PackedTensorAccessor32<scalar_t,3,torch::DefaultPtrTraits> d_rpb,
-    const torch::PackedTensorAccessor32<scalar_t,5,torch::DefaultPtrTraits> d_attn,
+    torch::PackedTensorAccessor64<scalar_t,3,torch::DefaultPtrTraits> d_rpb,
+    const torch::PackedTensorAccessor64<scalar_t,5,torch::DefaultPtrTraits> d_attn,
     const int height,
     const int width,
     const int dilation_in,
@@ -79,8 +79,8 @@ __global__ void rel_pos_bias_gradient_2d(
 
 template <int KERNEL_SIZE, int NEIGHBORHOOD_SIZE, int DILATION, typename scalar_t>
 __global__ void rel_pos_bias_gradient_2d_fp16(
-    torch::PackedTensorAccessor32<scalar_t,3,torch::DefaultPtrTraits> d_rpb,
-    const torch::PackedTensorAccessor32<scalar_t,5,torch::DefaultPtrTraits> d_attn,
+    torch::PackedTensorAccessor64<scalar_t,3,torch::DefaultPtrTraits> d_rpb,
+    const torch::PackedTensorAccessor64<scalar_t,5,torch::DefaultPtrTraits> d_attn,
     const int height,
     const int width,
     const int dilation_in,

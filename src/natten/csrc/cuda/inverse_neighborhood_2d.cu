@@ -42,7 +42,7 @@
 namespace natten {
 
 template<class scalar_t>
-using Tensor5D = typename torch::PackedTensorAccessor32<scalar_t,5,torch::DefaultPtrTraits>;
+using Tensor5D = typename torch::PackedTensorAccessor64<scalar_t,5,torch::DefaultPtrTraits>;
 
 template <int KERNEL_SIZE, int NEIGHBORHOOD_SIZE, int DILATION, typename scalar_t>
 __global__ void inverse_neighborhood_2d(           // K-grad / V-grad
