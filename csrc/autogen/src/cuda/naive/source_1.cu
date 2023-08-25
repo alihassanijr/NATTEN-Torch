@@ -1,14 +1,14 @@
 #include <cuda_runtime.h>
 #include <natten/dtypes.cuh>
 #include <natten/naive_argpack.h>
-#include <natten/cuda/naive/inverse_neighborhood_2d.cuh>
-#include <natten/cuda/naive/rel_pos_bias_2d.cuh>
 #include <natten/cuda/naive/rel_pos_bias_3d.cuh>
-#include <natten/cuda/naive/inverse_neighborhood_3d.cuh>
-#include <natten/cuda/naive/neighborhood_neighborhood_2d.cuh>
-#include <natten/cuda/naive/neighborhood_neighborhood_3d.cuh>
 #include <natten/cuda/naive/rel_pos_bias_1d.cuh>
 #include <natten/cuda/naive/inverse_neighborhood_1d.cuh>
+#include <natten/cuda/naive/inverse_neighborhood_3d.cuh>
+#include <natten/cuda/naive/neighborhood_neighborhood_3d.cuh>
+#include <natten/cuda/naive/inverse_neighborhood_2d.cuh>
+#include <natten/cuda/naive/neighborhood_neighborhood_2d.cuh>
+#include <natten/cuda/naive/rel_pos_bias_2d.cuh>
 namespace natten { 
 namespace cuda { 
 namespace naive { 

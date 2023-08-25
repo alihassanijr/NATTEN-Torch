@@ -16,7 +16,8 @@ void na1d_pn_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na1d_pn_cpu_naive_float(
   void * query_ptr,
@@ -27,7 +28,8 @@ void na1d_pn_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na2d_pn_cpu_naive_double(
   void * query_ptr,
@@ -93,7 +95,8 @@ void na1d_pn_bias_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na1d_pn_bias_cpu_naive_float(
   void * query_ptr,
@@ -105,7 +108,8 @@ void na1d_pn_bias_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na2d_pn_bias_cpu_naive_double(
   void * query_ptr,
@@ -174,7 +178,8 @@ void na1d_nn_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na1d_nn_cpu_naive_float(
   void * attn_ptr,
@@ -185,7 +190,8 @@ void na1d_nn_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na2d_nn_cpu_naive_double(
   void * attn_ptr,
@@ -250,7 +256,8 @@ void na1d_in_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na1d_in_cpu_naive_float(
   void * attn_ptr,
@@ -261,7 +268,8 @@ void na1d_in_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na2d_in_cpu_naive_double(
   void * attn_ptr,
@@ -325,7 +333,8 @@ void na1d_rpbgrad_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na1d_rpbgrad_cpu_naive_float(
   void * d_bias_ptr,
@@ -335,7 +344,8 @@ void na1d_rpbgrad_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation);
+  int dilation,
+  void * kv_seq_len);
 
 void na2d_rpbgrad_cpu_naive_double(
   void * d_bias_ptr,

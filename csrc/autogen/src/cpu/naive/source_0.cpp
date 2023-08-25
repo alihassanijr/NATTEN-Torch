@@ -1,6 +1,6 @@
 #include <natten/dtypes.h>
-#include <natten/cpu/naive/pointwise_neighborhood_2d.hpp>
 #include <natten/cpu/naive/neighborhood_neighborhood_1d.hpp>
+#include <natten/cpu/naive/pointwise_neighborhood_2d.hpp>
 #include <natten/cpu/naive/neighborhood_neighborhood_2d.hpp>
 #include <natten/cpu/naive/pointwise_neighborhood_1d.hpp>
 #include <natten/cpu/naive/pointwise_neighborhood_3d.hpp>
@@ -17,11 +17,12 @@ void na1d_pn_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = PointwiseNeighborhood1D<natten::float64>;
   Kernel kernel;
   kernel(
-query_ptr, key_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+query_ptr, key_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na1d_pn_cpu_naive_float(
@@ -33,11 +34,12 @@ void na1d_pn_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = PointwiseNeighborhood1D<natten::float32>;
   Kernel kernel;
   kernel(
-query_ptr, key_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+query_ptr, key_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na2d_pn_cpu_naive_double(
@@ -124,11 +126,12 @@ void na1d_pn_bias_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = PointwiseNeighborhood1DWithBias<natten::float64>;
   Kernel kernel;
   kernel(
-query_ptr, key_ptr, bias_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+query_ptr, key_ptr, bias_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na1d_pn_bias_cpu_naive_float(
@@ -141,11 +144,12 @@ void na1d_pn_bias_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = PointwiseNeighborhood1DWithBias<natten::float32>;
   Kernel kernel;
   kernel(
-query_ptr, key_ptr, bias_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+query_ptr, key_ptr, bias_ptr, attn_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na2d_pn_bias_cpu_naive_double(
@@ -235,11 +239,12 @@ void na1d_nn_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = NeighborhoodNeighborhood1D<natten::float64>;
   Kernel kernel;
   kernel(
-attn_ptr, value_ptr, output_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+attn_ptr, value_ptr, output_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na1d_nn_cpu_naive_float(
@@ -251,11 +256,12 @@ void na1d_nn_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = NeighborhoodNeighborhood1D<natten::float32>;
   Kernel kernel;
   kernel(
-attn_ptr, value_ptr, output_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+attn_ptr, value_ptr, output_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na2d_nn_cpu_naive_double(

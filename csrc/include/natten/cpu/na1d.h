@@ -41,18 +41,19 @@ void na1d_qk_forward(
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     if (bias_ptr == nullptr) {
         DISPATCH_DTYPE_na1d_pn_cpu_naive(T,
                 query_ptr, key_ptr, attn_ptr,
                 batch_size, heads, length, dim, 
-                kernel_size, dilation);
+                kernel_size, dilation, kv_seq_len);
     }
     else {
         DISPATCH_DTYPE_na1d_pn_bias_cpu_naive(T,
                 query_ptr, key_ptr, bias_ptr, attn_ptr,
                 batch_size, heads, length, dim, 
-                kernel_size, dilation);
+                kernel_size, dilation, kv_seq_len);
     }
 }
 
@@ -69,20 +70,21 @@ void na1d_qk_backward(
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     DISPATCH_DTYPE_na1d_nn_cpu_naive(T,
             d_attn_ptr, key_ptr, d_query_ptr,
             batch_size, heads, length, dim, 
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
     DISPATCH_DTYPE_na1d_in_cpu_naive(T,
             d_attn_ptr, query_ptr, d_key_ptr,
             batch_size, heads, length, dim, 
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
     if (d_bias_ptr != nullptr) {
         DISPATCH_DTYPE_na1d_rpbgrad_cpu_naive(T,
                 d_bias_ptr, d_attn_ptr,
                 batch_size, heads, length, dim, 
-                kernel_size, dilation);
+                kernel_size, dilation, kv_seq_len);
     }
 }
 
@@ -96,11 +98,12 @@ void na1d_av_forward(
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     DISPATCH_DTYPE_na1d_nn_cpu_naive(T,
             attn_ptr, value_ptr, output_ptr,
             batch_size, heads, length, dim, 
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
 }
 
 template<typename T>
@@ -115,15 +118,16 @@ void na1d_av_backward(
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     DISPATCH_DTYPE_na1d_pn_cpu_naive(T,
             d_output_ptr, value_ptr, d_attn_ptr,
             batch_size, heads, length, dim, 
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
     DISPATCH_DTYPE_na1d_in_cpu_naive(T,
             attn_ptr, d_output_ptr, d_value_ptr,
             batch_size, heads, length, dim, 
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
 }
 
 } // namespace cpu

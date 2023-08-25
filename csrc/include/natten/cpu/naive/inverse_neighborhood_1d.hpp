@@ -52,6 +52,8 @@ namespace naive {
 template <typename scalar_t>
 struct InverseNeighborhood1D {
 
+  using idx_t = const int64_t;
+
   void operator()(
     void * attn_ptr,
     void * d_output_ptr,
@@ -61,12 +63,14 @@ struct InverseNeighborhood1D {
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     launch(
       reinterpret_cast<scalar_t*>(attn_ptr),
       reinterpret_cast<scalar_t*>(d_output_ptr),
       reinterpret_cast<scalar_t*>(d_value_ptr),
-      length, heads, kernel_size, dilation, dim, batch_size);
+      length, heads, kernel_size, dilation, dim, batch_size, 
+      reinterpret_cast<idx_t*>(kv_seq_len));
   }
 
   void launch(                 // K-grad / V-grad
@@ -78,7 +82,8 @@ struct InverseNeighborhood1D {
         const int kernel_size,
         const int dilation,
         const int dim,
-        const int batch_size) {
+        const int batch_size,
+        idx_t* kv_seq_len) {
         const int neighborhood_size = kernel_size / 2;
         const int weights_stride_2 = kernel_size;
         const int weights_stride_1 = length * weights_stride_2;
@@ -87,23 +92,30 @@ struct InverseNeighborhood1D {
         const int values_stride_1  = length * values_stride_2;
         const int values_stride_0  = heads * values_stride_1;
         for (int b = 0; b < batch_size; b++) {
+            const int unpadded_length = (kv_seq_len == nullptr) ? length : std::max(idx_t(kernel_size * dilation), kv_seq_len[b]);
             at::parallel_for(0, heads, GRAIN_SIZE, [&](int start, int end) {
             for (int h = start; h < end; h++) {
-                for (int i = 0; i < length; i++) {
+                for (int i = 0; i < unpadded_length; i++) {
                     const int ni = get_backward_window_start(i, kernel_size, neighborhood_size, dilation);
-                    const int ei = get_backward_window_end(i, length, kernel_size, neighborhood_size, dilation);
+                    const int ei = get_backward_window_end(i, unpadded_length, kernel_size, neighborhood_size, dilation);
                     for (int d = 0; d < dim; d++) {
                         const int weightsOffset = b * weights_stride_0 + h * weights_stride_1;
                         const int valuesOffset = b * values_stride_0 + h * values_stride_1 + d;
                         scalar_t output_update = scalar_t(0);
                         for (int xi=ni; xi < ei; xi+=dilation){
-                            const int oni = get_window_start(xi, length, kernel_size, neighborhood_size, dilation);
+                            const int oni = get_window_start(xi, unpadded_length, kernel_size, neighborhood_size, dilation);
                             const int valuesIndex = valuesOffset + xi * values_stride_2;
                             const int weightsIndex = weightsOffset + xi * weights_stride_2 + int((i-oni)/dilation);
                             output_update += values[valuesIndex] * weights[weightsIndex];
                         }
                         const int linearIndex = b*values_stride_0 + h*values_stride_1 + i*values_stride_2 + d;
                         output[linearIndex] = output_update;
+                    }
+                }
+                for (int i = unpadded_length; i < length; i++) {
+                    for (int d = 0; d < dim; d++) {
+                        const int linearIndex = b*values_stride_0 + h*values_stride_1 + i*values_stride_2 + d;
+                        output[linearIndex] = scalar_t(0);
                     }
                 }
             }});

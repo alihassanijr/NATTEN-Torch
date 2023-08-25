@@ -50,6 +50,8 @@ namespace naive {
 template <typename scalar_t>
 struct RelPosBiasGradient1D {
 
+  using idx_t = const int64_t;
+
   void operator()(
     void * d_bias_ptr,
     void * d_attn_ptr,
@@ -58,11 +60,13 @@ struct RelPosBiasGradient1D {
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     launch(
       reinterpret_cast<scalar_t*>(d_bias_ptr),
       reinterpret_cast<scalar_t*>(d_attn_ptr),
-      length, heads, kernel_size, dilation, batch_size);
+      length, heads, kernel_size, dilation, batch_size, 
+      reinterpret_cast<idx_t*>(kv_seq_len));
   }
 
   void launch(
@@ -72,28 +76,25 @@ struct RelPosBiasGradient1D {
     const int heads,
     const int kernel_size,
     const int dilation,
-    const int batch_size) {
+    const int batch_size,
+    idx_t* kv_seq_len) {
     const int neighborhood_size = kernel_size / 2;
     const int d_bias_stride_0 = 2 * kernel_size - 1;
     const int d_attn_stride_2 = kernel_size;
     const int d_attn_stride_1 = length * d_attn_stride_2;
     const int d_attn_stride_0 = heads * d_attn_stride_1;
-    at::parallel_for(0, heads, GRAIN_SIZE, [&](int start, int end) {
-    for (int h = start; h < end; h++) {
-        for (int i = 0; i < length; i++) {
-            const int pi = get_pb_start(i, length, kernel_size, neighborhood_size, dilation);
+    for (int b = 0; b < batch_size; ++b) {
+      const int unpadded_length = (kv_seq_len == nullptr) ? length : std::max(idx_t(kernel_size * dilation), kv_seq_len[b]);
+      for (int i = 0; i < unpadded_length; i++) {
+        const int pi = get_pb_start(i, unpadded_length, kernel_size, neighborhood_size, dilation);
+        at::parallel_for(0, heads, GRAIN_SIZE, [&](int start, int end) {
+        for (int h = start; h < end; h++) {
             for (int ki = 0; ki < kernel_size; ki++) {
-                scalar_t d_bias_update = scalar_t(0);
-                int attnOffset = h * d_attn_stride_1 + i * d_attn_stride_2 + ki;
-                for (int b=0; b < batch_size; ++b){
-                    d_bias_update += d_attn[attnOffset];
-                    attnOffset += d_attn_stride_0;
-                }
-                const int index = h * d_bias_stride_0 + (pi+ki);
-                d_bias[index] += d_bias_update;
+              d_bias[h * d_bias_stride_0 + (pi+ki)] += d_attn[b * d_attn_stride_0 + h * d_attn_stride_1 + i * d_attn_stride_2 + ki];
             }
-        }
-    }});
+        }});
+      }
+    }
   }
 };
 

@@ -41,7 +41,8 @@ void na1d_qk_forward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 void na1d_qk_backward(
     const at::Tensor &d_attn,
@@ -55,7 +56,8 @@ void na1d_qk_backward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 void na1d_av_forward(
     const at::Tensor &attn,
@@ -66,7 +68,8 @@ void na1d_av_forward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 void na1d_av_backward(
     const at::Tensor &d_out,
@@ -79,7 +82,8 @@ void na1d_av_backward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 } // namespace cuda
 } // namespace pytorch

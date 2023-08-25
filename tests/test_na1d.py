@@ -193,13 +193,14 @@ class NA1DTests(unittest.TestCase):
             B=4, H=8, L=100, D=32, has_bias=True, kernel_size=13, dilation=2
         )
 
-    def _test_autograd_qk(self, B, H, L, D, kernel_size, dilation, eps, device):
+    def _test_autograd_qk(self, B, H, L, D, kernel_size, dilation, eps, device, kv_mask):
         torch.manual_seed(42)
         kwargs = {"dtype": torch.float64, "device": device, "requires_grad": True}
         query = torch.randn((B, H, L, D), **kwargs)
         key = torch.randn((B, H, L, D), **kwargs)
         rpb = torch.randn((H, 2 * kernel_size - 1), **kwargs)
-        variables = [query, key, rpb, kernel_size, dilation]
+        kv_seq_len = torch.randint(low=kernel_size * dilation, high=L, size=[B]) if kv_mask else None
+        variables = [query, key, rpb, kernel_size, dilation, kv_seq_len]
 
         assert gradcheck(
             natten1dqkrpb,
@@ -211,12 +212,13 @@ class NA1DTests(unittest.TestCase):
             fast_mode=False,
         ), f"Autograd check failed for NA1D: QK."
 
-    def _test_autograd_av(self, B, H, L, D, kernel_size, dilation, eps, device):
+    def _test_autograd_av(self, B, H, L, D, kernel_size, dilation, eps, device, kv_mask):
         torch.manual_seed(42)
         kwargs = {"dtype": torch.float64, "device": device, "requires_grad": True}
         attn = torch.randn((B, H, L, kernel_size), **kwargs)
         value = torch.randn((B, H, L, D), **kwargs)
-        variables = [attn, value, kernel_size, dilation]
+        kv_seq_len = torch.randint(low=kernel_size * dilation, high=L, size=[B]) if kv_mask and device == "cpu" else None
+        variables = [attn, value, kernel_size, dilation, kv_seq_len]
 
         assert gradcheck(
             natten1dav,
@@ -228,7 +230,7 @@ class NA1DTests(unittest.TestCase):
             fast_mode=False,
         ), f"Autograd check failed for NA1D: AV."
 
-    def _test_autograd(self, B, H, L, D, kernel_size, dilation, eps, device):
+    def _test_autograd(self, B, H, L, D, kernel_size, dilation, eps, device, kv_mask=False):
         self._test_autograd_qk(
             B=B,
             H=H,
@@ -238,6 +240,7 @@ class NA1DTests(unittest.TestCase):
             dilation=dilation,
             eps=eps,
             device=device,
+            kv_mask=kv_mask,
         )
         self._test_autograd_av(
             B=B,
@@ -248,17 +251,29 @@ class NA1DTests(unittest.TestCase):
             dilation=dilation,
             eps=eps,
             device=device,
+            kv_mask=kv_mask,
         )
 
     def test_autograd_cpu(self):
         self._test_autograd(
-            B=2, H=2, L=16, D=8, kernel_size=5, dilation=1, eps=1e-6, device="cpu"
+            B=2, H=2, L=16, D=8, kernel_size=5, dilation=1, eps=1e-6, device="cpu", kv_mask=False
         )
         self._test_autograd(
-            B=2, H=2, L=16, D=8, kernel_size=5, dilation=3, eps=1e-6, device="cpu"
+            B=2, H=2, L=16, D=8, kernel_size=5, dilation=3, eps=1e-6, device="cpu", kv_mask=False
         )
         self._test_autograd(
-            B=2, H=2, L=7, D=4, kernel_size=3, dilation=2, eps=1e-6, device="cpu"
+            B=2, H=2, L=7, D=4, kernel_size=3, dilation=2, eps=1e-6, device="cpu", kv_mask=False
+        )
+
+    def test_autograd_cpu_kv_mask(self):
+        self._test_autograd(
+            B=2, H=2, L=16, D=8, kernel_size=5, dilation=1, eps=1e-6, device="cpu", kv_mask=True
+        )
+        self._test_autograd(
+            B=2, H=2, L=16, D=8, kernel_size=5, dilation=3, eps=1e-6, device="cpu", kv_mask=True
+        )
+        self._test_autograd(
+            B=2, H=2, L=7, D=4, kernel_size=3, dilation=2, eps=1e-6, device="cpu", kv_mask=True
         )
 
     def test_autograd_cuda_naive(self):

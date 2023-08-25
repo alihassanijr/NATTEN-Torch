@@ -69,14 +69,21 @@ class NeighborhoodAttention1D(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x):
-        B, Lp, C = x.shape
-        L = Lp
-        pad_l = pad_r = 0
-        if L < self.window_size:
-            pad_r = max(0, self.window_size - L)
-            x = pad(x, (0, 0, pad_l, pad_r))
-            _, L, _ = x.shape
+    def forward(self, x, kv_seq_len=None):
+        B, L, C = x.shape
+        if L < kernel_size * dilation:
+            raise ValueError("Neighborhood attention inputs must be at least of length kernel_size * dilation. "
+                             f"Got {self.kernel_size=} and {self.dilation=}, but sequence length is {L}.")
+        if kv_seq_len is not None:
+            if not isinstance(kv_seq_len, torch.Tensor):
+                raise ValueError(f"`kv_seq_len` must be a Tensor, got {type(kv_seq_len)}.")
+            if kv_seq_len.dtype != torch.long:
+                raise ValueError(f"`kv_seq_len` must a Long (int64) Tensor, got {kv_seq_len.dtype}.")
+            min_length = kv_seq_len.min()
+            if min_length < kernel_size * dilation:
+                raise ValueError("Neighborhood attention inputs must be at least of length kernel_size * dilation. "
+                                 f"Got {self.kernel_size=} and {self.dilation=}, but minimum sequence length is {min_length}.")
+
         qkv = (
             self.qkv(x)
             .reshape(B, L, 3, self.num_heads, self.head_dim)
@@ -84,13 +91,11 @@ class NeighborhoodAttention1D(nn.Module):
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
         q = q * self.scale
-        attn = natten1dqkrpb(q, k, self.rpb, self.kernel_size, self.dilation)
+        attn = natten1dqkrpb(q, k, self.rpb, self.kernel_size, self.dilation, kv_seq_len)
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
-        x = natten1dav(attn, v, self.kernel_size, self.dilation)
+        x = natten1dav(attn, v, self.kernel_size, self.dilation, kv_seq_len)
         x = x.permute(0, 2, 1, 3).reshape(B, L, C)
-        if pad_r:
-            x = x[:, :Lp, :]
 
         return self.proj_drop(self.proj(x))
 

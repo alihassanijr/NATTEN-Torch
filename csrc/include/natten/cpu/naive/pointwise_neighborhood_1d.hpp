@@ -50,6 +50,8 @@ namespace naive {
 template <typename scalar_t>
 struct PointwiseNeighborhood1D {
 
+  using idx_t = const int64_t;
+
   void operator()(
     void * query_ptr,
     void * key_ptr,
@@ -59,12 +61,14 @@ struct PointwiseNeighborhood1D {
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     launch(
       reinterpret_cast<scalar_t*>(query_ptr),
       reinterpret_cast<scalar_t*>(key_ptr),
       reinterpret_cast<scalar_t*>(attn_ptr),
-      length, heads, kernel_size, dilation, dim, batch_size);
+      length, heads, kernel_size, dilation, dim, batch_size, 
+      reinterpret_cast<idx_t*>(kv_seq_len));
   }
 
   void launch(                // QK    / A-grad
@@ -76,7 +80,8 @@ struct PointwiseNeighborhood1D {
     const int kernel_size,
     const int dilation,
     const int dim,
-    const int batch_size) {
+    const int batch_size,
+    idx_t* kv_seq_len) {
     const int neighborhood_size = kernel_size / 2;
     const int attn_stride_2 = kernel_size;
     const int attn_stride_1 = length * attn_stride_2;
@@ -88,12 +93,14 @@ struct PointwiseNeighborhood1D {
     using Vec = at::vec::Vectorized<scalar_t>;
     at::parallel_for(0, batch_size*heads*length, GRAIN_SIZE, [&](int start, int end) {
     for (int x = start; x < end; x++) {
-        int indtmp1 = x/length;
-        const int i = x - indtmp1 * length;
-        int indtmp2 = indtmp1/heads;
-        const int h = indtmp1 - indtmp2 * heads;
-        const int b = indtmp2;
-        const int ni = get_window_start(i, length, kernel_size, neighborhood_size, dilation);
+      int indtmp1 = x/length;
+      const int i = x - indtmp1 * length;
+      int indtmp2 = indtmp1/heads;
+      const int h = indtmp1 - indtmp2 * heads;
+      const int b = indtmp2;
+      const int unpadded_length = (kv_seq_len == nullptr) ? length : std::max(idx_t(kernel_size * dilation), kv_seq_len[b]);
+      if (i < unpadded_length) {
+        const int ni = get_window_start(i, unpadded_length, kernel_size, neighborhood_size, dilation);
         const int batchHeadOffset = b * query_stride_0 + h * query_stride_1;
         const int queryOffset = batchHeadOffset + i * query_stride_2;
         int index = b * attn_stride_0 + h * attn_stride_1 + i * attn_stride_2;
@@ -111,13 +118,22 @@ struct PointwiseNeighborhood1D {
             attn[index] = sum_val;
             index++;
         }
+      }
+      else if (i < length) {
+        int index = b * attn_stride_0 + h * attn_stride_1 + i * attn_stride_2;
+        for (int ki = 0; ki < kernel_size; ki++) {
+            attn[index] = scalar_t(0);
+            index++;
+        }
+      }
     }});
 #else
     for (int b = 0; b < batch_size; b++) {
+        const int unpadded_length = (kv_seq_len == nullptr) ? length : std::max(idx_t(kernel_size * dilation), kv_seq_len[b]);
         at::parallel_for(0, heads, GRAIN_SIZE, [&](int start, int end) {
         for (int h = start; h < end; h++) {
-            for (int i = 0; i < length; i++) {
-                const int ni = get_window_start(i, length, kernel_size, neighborhood_size, dilation);
+            for (int i = 0; i < unpadded_length; i++) {
+                const int ni = get_window_start(i, unpadded_length, kernel_size, neighborhood_size, dilation);
                 for (int ki = 0; ki < kernel_size; ki++) {
                     scalar_t updt = scalar_t(0);
                     const int batchHeadOffset = b * query_stride_0 + h * query_stride_1;
@@ -129,6 +145,12 @@ struct PointwiseNeighborhood1D {
                     attn[index] = updt;
                 }
             }
+            for (int i = unpadded_length; i < length; i++) {
+                for (int ki = 0; ki < kernel_size; ki++) {
+                    const int index = b * attn_stride_0 + h * attn_stride_1 + i * attn_stride_2 + ki;
+                    attn[index] = scalar_t(0);
+                }
+            }
         }});
     }
 #endif
@@ -137,6 +159,8 @@ struct PointwiseNeighborhood1D {
 
 template <typename scalar_t>
 struct PointwiseNeighborhood1DWithBias {
+
+  using idx_t = const int64_t;
 
   void operator()(
     void * query_ptr,
@@ -148,13 +172,15 @@ struct PointwiseNeighborhood1DWithBias {
     int length,
     int dim,
     int kernel_size,
-    int dilation) {
+    int dilation,
+    void * kv_seq_len) {
     launch(
       reinterpret_cast<scalar_t*>(query_ptr),
       reinterpret_cast<scalar_t*>(key_ptr),
       reinterpret_cast<scalar_t*>(bias_ptr),
       reinterpret_cast<scalar_t*>(attn_ptr),
-      length, heads, kernel_size, dilation, dim, batch_size);
+      length, heads, kernel_size, dilation, dim, batch_size, 
+      reinterpret_cast<idx_t*>(kv_seq_len));
   }
 
   void launch(                // QK
@@ -167,7 +193,8 @@ struct PointwiseNeighborhood1DWithBias {
     const int kernel_size,
     const int dilation,
     const int dim,
-    const int batch_size) {
+    const int batch_size,
+    idx_t* kv_seq_len) {
     const int neighborhood_size = kernel_size / 2;
     const int bias_stride_0 = 2 * kernel_size - 1;
     const int attn_stride_2 = kernel_size;
@@ -180,13 +207,15 @@ struct PointwiseNeighborhood1DWithBias {
     using Vec = at::vec::Vectorized<scalar_t>;
     at::parallel_for(0, batch_size*heads*length, GRAIN_SIZE, [&](int start, int end) {
     for (int x = start; x < end; x++) {
-        int indtmp1 = x/length;
-        const int i = x - indtmp1 * length;
-        int indtmp2 = indtmp1/heads;
-        const int h = indtmp1 - indtmp2 * heads;
-        const int b = indtmp2;
-        const int ni = get_window_start(i, length, kernel_size, neighborhood_size, dilation);
-        const int pi = get_pb_start(i, length, kernel_size, neighborhood_size, dilation);
+      int indtmp1 = x/length;
+      const int i = x - indtmp1 * length;
+      int indtmp2 = indtmp1/heads;
+      const int h = indtmp1 - indtmp2 * heads;
+      const int b = indtmp2;
+      const int unpadded_length = (kv_seq_len == nullptr) ? length : std::max(idx_t(kernel_size * dilation), kv_seq_len[b]);
+      if (i < unpadded_length) {
+        const int ni = get_window_start(i, unpadded_length, kernel_size, neighborhood_size, dilation);
+        const int pi = get_pb_start(i, unpadded_length, kernel_size, neighborhood_size, dilation);
         const int batchHeadOffset = b * query_stride_0 + h * query_stride_1;
         const int queryOffset = batchHeadOffset + i * query_stride_2;
         int index = b * attn_stride_0 + h * attn_stride_1 + i * attn_stride_2;
@@ -205,14 +234,23 @@ struct PointwiseNeighborhood1DWithBias {
             attn[index] = bias[biasIndex] + sum_val;
             index++;
         }
+      }
+      else if (i < length) {
+        int index = b * attn_stride_0 + h * attn_stride_1 + i * attn_stride_2;
+        for (int ki = 0; ki < kernel_size; ki++) {
+            attn[index] = scalar_t(0);
+            index++;
+        }
+      }
     }});
 #else
     for (int b = 0; b < batch_size; b++) {
+        const int unpadded_length = (kv_seq_len == nullptr) ? length : std::max(idx_t(kernel_size * dilation), kv_seq_len[b]);
         at::parallel_for(0, heads, GRAIN_SIZE, [&](int start, int end) {
         for (int h = start; h < end; h++) {
-            for (int i = 0; i < length; i++) {
-                const int ni = get_window_start(i, length, kernel_size, neighborhood_size, dilation);
-                const int pi = get_pb_start(i, length, kernel_size, neighborhood_size, dilation);
+            for (int i = 0; i < unpadded_length; i++) {
+                const int ni = get_window_start(i, unpadded_length, kernel_size, neighborhood_size, dilation);
+                const int pi = get_pb_start(i, unpadded_length, kernel_size, neighborhood_size, dilation);
                 for (int ki = 0; ki < kernel_size; ki++) {
                     scalar_t updt = scalar_t(0);
                     const int batchHeadOffset = b * query_stride_0 + h * query_stride_1;
@@ -224,6 +262,12 @@ struct PointwiseNeighborhood1DWithBias {
                     const int biasIndex = h * bias_stride_0 + (pi+ki);
                     updt += bias[biasIndex];
                     attn[index] = updt;
+                }
+            }
+            for (int i = unpadded_length; i < length; i++) {
+                for (int ki = 0; ki < kernel_size; ki++) {
+                    const int index = b * attn_stride_0 + h * attn_stride_1 + i * attn_stride_2 + ki;
+                    attn[index] = scalar_t(0);
                 }
             }
         }});

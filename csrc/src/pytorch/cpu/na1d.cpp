@@ -45,14 +45,16 @@ void na1d_qk_forward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     DISPATCH_DTYPE(query.scalar_type(), natten::cpu::na1d_qk_forward,
             static_cast<void *>(query.data_ptr()),
             static_cast<void *>(key.data_ptr()),
             bias.has_value() ? static_cast<void *>(bias.value().data_ptr()) : nullptr,
             static_cast<void *>(attn.data_ptr()),
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation,
+            kv_seq_len.has_value() ? static_cast<void *>(kv_seq_len.value().data_ptr()) : nullptr);
 }
 
 void na1d_qk_backward(
@@ -67,7 +69,8 @@ void na1d_qk_backward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     DISPATCH_DTYPE(d_attn.scalar_type(), natten::cpu::na1d_qk_backward,
             static_cast<void *>(query.data_ptr()),
             static_cast<void *>(key.data_ptr()),
@@ -76,7 +79,8 @@ void na1d_qk_backward(
             static_cast<void *>(d_key.data_ptr()),
             d_bias.has_storage() ? static_cast<void *>(d_bias.data_ptr()) : nullptr,
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation,
+            kv_seq_len.has_value() ? static_cast<void *>(kv_seq_len.value().data_ptr()) : nullptr);
 }
 
 void na1d_av_forward(
@@ -88,13 +92,15 @@ void na1d_av_forward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     DISPATCH_DTYPE(attn.scalar_type(), natten::cpu::na1d_av_forward,
             static_cast<void *>(attn.data_ptr()),
             static_cast<void *>(value.data_ptr()),
             static_cast<void *>(output.data_ptr()),
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation,
+            kv_seq_len.has_value() ? static_cast<void *>(kv_seq_len.value().data_ptr()) : nullptr);
 }
 
 void na1d_av_backward(
@@ -108,7 +114,8 @@ void na1d_av_backward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     DISPATCH_DTYPE(d_out.scalar_type(), natten::cpu::na1d_av_backward,
             static_cast<void *>(attn.data_ptr()),
             static_cast<void *>(value.data_ptr()),
@@ -116,7 +123,8 @@ void na1d_av_backward(
             static_cast<void *>(d_attn.data_ptr()),
             static_cast<void *>(d_value.data_ptr()),
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation,
+            kv_seq_len.has_value() ? static_cast<void *>(kv_seq_len.value().data_ptr()) : nullptr);
 }
 
 } // namespace cpu

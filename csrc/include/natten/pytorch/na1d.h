@@ -36,7 +36,8 @@ at::Tensor na1d_qk_forward(
     const at::Tensor &key,
     const at::optional<at::Tensor> &bias,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 std::vector<at::Tensor> na1d_qk_backward(
     const at::Tensor &d_attn,
@@ -44,20 +45,23 @@ std::vector<at::Tensor> na1d_qk_backward(
     const at::Tensor &key,
     const bool has_bias,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 at::Tensor na1d_av_forward(
     const at::Tensor &attn,
     const at::Tensor &value,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 std::vector<at::Tensor> na1d_av_backward(
     const at::Tensor &d_out,
     const at::Tensor &attn,
     const at::Tensor &value,
     const int kernel_size,
-    const int dilation);
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len);
 
 } // namespace pytorch
 } // namespace natten

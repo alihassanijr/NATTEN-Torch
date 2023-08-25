@@ -1,11 +1,11 @@
 #include <natten/dtypes.h>
-#include <natten/cpu/naive/inverse_neighborhood_1d.hpp>
-#include <natten/cpu/naive/rel_pos_bias_2d.hpp>
-#include <natten/cpu/naive/neighborhood_neighborhood_3d.hpp>
-#include <natten/cpu/naive/inverse_neighborhood_3d.hpp>
 #include <natten/cpu/naive/rel_pos_bias_1d.hpp>
+#include <natten/cpu/naive/rel_pos_bias_2d.hpp>
+#include <natten/cpu/naive/inverse_neighborhood_1d.hpp>
 #include <natten/cpu/naive/rel_pos_bias_3d.hpp>
+#include <natten/cpu/naive/inverse_neighborhood_3d.hpp>
 #include <natten/cpu/naive/inverse_neighborhood_2d.hpp>
+#include <natten/cpu/naive/neighborhood_neighborhood_3d.hpp>
 namespace natten { 
 namespace cpu { 
 namespace naive { 
@@ -59,11 +59,12 @@ void na1d_in_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = InverseNeighborhood1D<natten::float64>;
   Kernel kernel;
   kernel(
-attn_ptr, d_output_ptr, d_value_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+attn_ptr, d_output_ptr, d_value_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na1d_in_cpu_naive_float(
@@ -75,11 +76,12 @@ void na1d_in_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = InverseNeighborhood1D<natten::float32>;
   Kernel kernel;
   kernel(
-attn_ptr, d_output_ptr, d_value_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+attn_ptr, d_output_ptr, d_value_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na2d_in_cpu_naive_double(
@@ -164,11 +166,12 @@ void na1d_rpbgrad_cpu_naive_double(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = RelPosBiasGradient1D<natten::float64>;
   Kernel kernel;
   kernel(
-d_bias_ptr, d_attn_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+d_bias_ptr, d_attn_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na1d_rpbgrad_cpu_naive_float(
@@ -179,11 +182,12 @@ void na1d_rpbgrad_cpu_naive_float(
   int length,
   int dim,
   int kernel_size,
-  int dilation) {
+  int dilation,
+  void * kv_seq_len) {
   using Kernel = RelPosBiasGradient1D<natten::float32>;
   Kernel kernel;
   kernel(
-d_bias_ptr, d_attn_ptr, batch_size, heads, length, dim, kernel_size, dilation);
+d_bias_ptr, d_attn_ptr, batch_size, heads, length, dim, kernel_size, dilation, kv_seq_len);
 }
 
 void na2d_rpbgrad_cpu_naive_double(

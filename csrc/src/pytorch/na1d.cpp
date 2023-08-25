@@ -42,7 +42,8 @@ at::Tensor na1d_qk_forward(
     const at::Tensor &key,
     const at::optional<at::Tensor> &bias,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     CHECK_CONTIGUOUS(query);
     CHECK_CONTIGUOUS(key);
     TORCH_CHECK(query.scalar_type() == key.scalar_type(), "Query and key tensors must match in dtype.");
@@ -61,6 +62,16 @@ at::Tensor na1d_qk_forward(
         TORCH_CHECK(bias.value().size(0) == query.size(1), "Expected bias.shape[0] == query.shape[1] == heads.");
         TORCH_CHECK(int((bias.value().size(1) + 1) / 2) == kernel_size, "Invalid bias shape.");
     }
+    if (kv_seq_len.has_value()) {
+        TORCH_CHECK(
+                kv_seq_len.value().scalar_type() == torch::kInt64, 
+                "`kv_seq_len` must be an unsigned integer tensor (uint32 or uint64).");
+        TORCH_CHECK(kv_seq_len.value().device().is_cuda() == query.device().is_cuda(), 
+                "Expected `kv_seq_len` to be on the same device as the query and key tensors.");
+        CHECK_CONTIGUOUS(kv_seq_len.value());
+        TORCH_CHECK(kv_seq_len.value().dim() == 1 && kv_seq_len.value().size(0) == query.size(0),
+                "`kv_seq_len` must be a rank-1 tensor (a vector) with the same length as the batch size.");
+    }
     int batch_size = query.size(0);
     int heads      = query.size(1);
     int length     = query.size(2);
@@ -73,7 +84,7 @@ at::Tensor na1d_qk_forward(
             bias,
             attn,
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
     return attn;
 }
 
@@ -84,7 +95,8 @@ std::vector<at::Tensor> na1d_qk_backward(
     const at::Tensor &key,
     const bool has_bias,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     CHECK_CONTIGUOUS(query);
     CHECK_CONTIGUOUS(key);
     CHECK_CONTIGUOUS(d_attn);
@@ -103,6 +115,16 @@ std::vector<at::Tensor> na1d_qk_backward(
             kernel_size == d_attn.size(3), "Wrong shape for d_attn.");
     TORCH_CHECK(query.device().is_cuda() == key.device().is_cuda() && query.device().is_cuda() == d_attn.device().is_cuda(), 
             "Expected query, key, and d_attn to be on the same device.");
+    if (kv_seq_len.has_value()) {
+        TORCH_CHECK(
+                kv_seq_len.value().scalar_type() == torch::kInt64, 
+                "`kv_seq_len` must be an unsigned integer tensor (uint32 or uint64).");
+        TORCH_CHECK(kv_seq_len.value().device().is_cuda() == query.device().is_cuda(), 
+                "Expected `kv_seq_len` to be on the same device as the query and key tensors.");
+        CHECK_CONTIGUOUS(kv_seq_len.value());
+        TORCH_CHECK(kv_seq_len.value().dim() == 1 && kv_seq_len.value().size(0) == query.size(0),
+                "`kv_seq_len` must be a rank-1 tensor (a vector) with the same length as the batch size.");
+    }
     int batch_size = query.size(0);
     int heads      = query.size(1);
     int length     = query.size(2);
@@ -124,7 +146,7 @@ std::vector<at::Tensor> na1d_qk_backward(
             d_key,
             d_bias,
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
     return {d_query, d_key, d_bias};
 }
 
@@ -132,7 +154,8 @@ at::Tensor na1d_av_forward(
     const at::Tensor &attn,
     const at::Tensor &value,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     CHECK_CONTIGUOUS(attn);
     CHECK_CONTIGUOUS(value);
     TORCH_CHECK(attn.scalar_type() == value.scalar_type(), "Attention and value tensors must match in dtype.");
@@ -143,6 +166,16 @@ at::Tensor na1d_av_forward(
             attn.size(2) == value.size(2), "Expected attention and value to match in batch size, heads, and length.");
     TORCH_CHECK(kernel_size == attn.size(3), "Attention weights per token do not match kernel size.");
     TORCH_CHECK(attn.device().is_cuda() == value.device().is_cuda(), "Expected both attention and value to be on the same device.");
+    if (kv_seq_len.has_value()) {
+        TORCH_CHECK(
+                kv_seq_len.value().scalar_type() == torch::kInt64, 
+                "`kv_seq_len` must be an unsigned integer tensor (uint32 or uint64).");
+        TORCH_CHECK(kv_seq_len.value().device().is_cuda() == attn.device().is_cuda(), 
+                "Expected `kv_seq_len` to be on the same device as the query and key tensors.");
+        CHECK_CONTIGUOUS(kv_seq_len.value());
+        TORCH_CHECK(kv_seq_len.value().dim() == 1 && kv_seq_len.value().size(0) == attn.size(0),
+                "`kv_seq_len` must be a rank-1 tensor (a vector) with the same length as the batch size.");
+    }
     int batch_size = value.size(0);
     int heads      = value.size(1);
     int length     = value.size(2);
@@ -154,7 +187,7 @@ at::Tensor na1d_av_forward(
             value,
             output,
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
     return output;
 }
 
@@ -163,7 +196,8 @@ std::vector<at::Tensor> na1d_av_backward(
     const at::Tensor &attn,
     const at::Tensor &value,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
     CHECK_CONTIGUOUS(attn);
     CHECK_CONTIGUOUS(value);
     CHECK_CONTIGUOUS(d_out);
@@ -182,6 +216,16 @@ std::vector<at::Tensor> na1d_av_backward(
             kernel_size == attn.size(3), "Wrong shape for attn.");
     TORCH_CHECK(d_out.device().is_cuda() == value.device().is_cuda() && d_out.device().is_cuda() == attn.device().is_cuda(), 
             "Expected d_out, value, and attn to be on the same device.");
+    if (kv_seq_len.has_value()) {
+        TORCH_CHECK(
+                kv_seq_len.value().scalar_type() == torch::kInt64, 
+                "`kv_seq_len` must be an unsigned integer tensor (uint32 or uint64).");
+        TORCH_CHECK(kv_seq_len.value().device().is_cuda() == d_out.device().is_cuda(), 
+                "Expected `kv_seq_len` to be on the same device as the query and key tensors.");
+        CHECK_CONTIGUOUS(kv_seq_len.value());
+        TORCH_CHECK(kv_seq_len.value().dim() == 1 && kv_seq_len.value().size(0) == d_out.size(0),
+                "`kv_seq_len` must be a rank-1 tensor (a vector) with the same length as the batch size.");
+    }
     int batch_size = d_out.size(0);
     int heads      = d_out.size(1);
     int length     = d_out.size(2);
@@ -196,7 +240,7 @@ std::vector<at::Tensor> na1d_av_backward(
             d_attn,
             d_value,
             batch_size, heads, length, dim,
-            kernel_size, dilation);
+            kernel_size, dilation, kv_seq_len);
     return {d_attn, d_value};
 }
 

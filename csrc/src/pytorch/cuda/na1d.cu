@@ -46,7 +46,12 @@ void na1d_qk_forward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
+    if (kv_seq_len.has_value()) {
+        std::cerr << "NATTEN does not support `kv_seq_len` on CUDA yet."  << std::endl; 
+        exit(EXIT_FAILURE); 
+    }
     DISPATCH_DTYPE(query.scalar_type(), natten::cuda::na1d_qk_forward,
             static_cast<void *>(query.data_ptr()),
             static_cast<void *>(key.data_ptr()),
@@ -68,7 +73,12 @@ void na1d_qk_backward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
+    if (kv_seq_len.has_value()) {
+        std::cerr << "NATTEN does not support `kv_seq_len` on CUDA yet."  << std::endl; 
+        exit(EXIT_FAILURE); 
+    }
     DISPATCH_DTYPE(d_attn.scalar_type(), natten::cuda::na1d_qk_backward,
             static_cast<void *>(query.data_ptr()),
             static_cast<void *>(key.data_ptr()),
@@ -89,7 +99,12 @@ void na1d_av_forward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
+    if (kv_seq_len.has_value()) {
+        std::cerr << "NATTEN does not support `kv_seq_len` on CUDA yet."  << std::endl; 
+        exit(EXIT_FAILURE); 
+    }
     DISPATCH_DTYPE(attn.scalar_type(), natten::cuda::na1d_av_forward,
             static_cast<void *>(attn.data_ptr()),
             static_cast<void *>(value.data_ptr()),
@@ -109,7 +124,12 @@ void na1d_av_backward(
     const int length,
     const int dim,
     const int kernel_size,
-    const int dilation) {
+    const int dilation,
+    const at::optional<at::Tensor> &kv_seq_len) {
+    if (kv_seq_len.has_value()) {
+        std::cerr << "NATTEN does not support `kv_seq_len` on CUDA yet."  << std::endl; 
+        exit(EXIT_FAILURE); 
+    }
     DISPATCH_DTYPE(d_out.scalar_type(), natten::cuda::na1d_av_backward,
             static_cast<void *>(attn.data_ptr()),
             static_cast<void *>(value.data_ptr()),

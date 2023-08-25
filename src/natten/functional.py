@@ -79,11 +79,15 @@ def disable_gemm_na():
 class NeighborhoodAttention1DQKAutogradFunction(Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, query, key, rpb, kernel_size, dilation):
+    def forward(ctx, query, key, rpb, kernel_size, dilation, kv_seq_len):
         query = query.contiguous()
         key = key.contiguous()
-        attn = _C.na1d_qk_forward(query, key, rpb, kernel_size, dilation)
-        ctx.save_for_backward(query, key)
+        if rpb is not None:
+            rpb = rpb.contiguous()
+        if kv_seq_len is not None:
+            kv_seq_len = kv_seq_len.contiguous()
+        attn = _C.na1d_qk_forward(query, key, rpb, kernel_size, dilation, kv_seq_len)
+        ctx.save_for_backward(query, key, kv_seq_len)
         ctx.kernel_size = kernel_size
         ctx.dilation = dilation
         ctx.bias = rpb is not None
@@ -99,19 +103,22 @@ class NeighborhoodAttention1DQKAutogradFunction(Function):
             ctx.bias,
             ctx.kernel_size,
             ctx.dilation,
+            ctx.saved_tensors[2],
         )
         d_query, d_key, d_rpb = outputs
-        return d_query, d_key, d_rpb, None, None
+        return d_query, d_key, d_rpb, None, None, None
 
 
 class NeighborhoodAttention1DAVAutogradFunction(Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, attn, value, kernel_size, dilation):
+    def forward(ctx, attn, value, kernel_size, dilation, kv_seq_len):
         attn = attn.contiguous()
         value = value.contiguous()
-        out = _C.na1d_av_forward(attn, value, kernel_size, dilation)
-        ctx.save_for_backward(attn, value)
+        if kv_seq_len is not None:
+            kv_seq_len = kv_seq_len.contiguous()
+        out = _C.na1d_av_forward(attn, value, kernel_size, dilation, kv_seq_len)
+        ctx.save_for_backward(attn, value, kv_seq_len)
         ctx.kernel_size = kernel_size
         ctx.dilation = dilation
         return out
@@ -125,9 +132,10 @@ class NeighborhoodAttention1DAVAutogradFunction(Function):
             ctx.saved_tensors[1],
             ctx.kernel_size,
             ctx.dilation,
+            ctx.saved_tensors[2],
         )
         d_attn, d_value = outputs
-        return d_attn, d_value, None, None
+        return d_attn, d_value, None, None, None
 
 
 class NeighborhoodAttention2DQKAutogradFunction(Function):
@@ -252,21 +260,21 @@ class NeighborhoodAttention3DAVAutogradFunction(Function):
         return d_attn, d_value, None, None, None, None
 
 
-def natten1dqkrpb(query, key, rpb, kernel_size, dilation):
+def natten1dqkrpb(query, key, rpb, kernel_size, dilation, kv_seq_len=None):
     return NeighborhoodAttention1DQKAutogradFunction.apply(
-        query, key, rpb, kernel_size, dilation
+        query, key, rpb, kernel_size, dilation, kv_seq_len,
     )
 
 
-def natten1dqk(query, key, kernel_size, dilation):
+def natten1dqk(query, key, kernel_size, dilation, kv_seq_len=None):
     return NeighborhoodAttention1DQKAutogradFunction.apply(
-        query, key, None, kernel_size, dilation
+        query, key, None, kernel_size, dilation, kv_seq_len,
     )
 
 
-def natten1dav(attn, value, kernel_size, dilation):
+def natten1dav(attn, value, kernel_size, dilation, kv_seq_len=None):
     return NeighborhoodAttention1DAVAutogradFunction.apply(
-        attn, value, kernel_size, dilation
+        attn, value, kernel_size, dilation, kv_seq_len,
     )
 
 
