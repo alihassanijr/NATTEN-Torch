@@ -207,7 +207,10 @@ class BuildExtension(build_ext):
 
         # Config and build the extension
         subprocess.check_call(['cmake', cmake_lists_dir] + cmake_args, cwd=self.build_lib)
-        subprocess.check_call(['make', f"-j{n_workers}"], cwd=self.build_lib)
+        if not IS_WINDOWS:
+            subprocess.check_call(['make', f"-j{n_workers}"], cwd=self.build_lib)
+        else:
+            subprocess.check_call(['cmake', '--build', f"-j{n_workers}", "."], cwd=self.build_lib)
 
 
 setup(
