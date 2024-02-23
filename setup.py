@@ -190,9 +190,24 @@ class BuildExtension(build_ext):
         subprocess.check_call(
             ["cmake", cmake_lists_dir] + cmake_args, cwd=self.build_lib
         )
-        subprocess.check_call(
-            ["make", f"-j{n_workers}", f"VERBOSE={verbose}"], cwd=self.build_lib
-        )
+        if IS_WINDOWS:
+            subprocess.check_call(
+                [
+                    "cmake",
+                    "--build",
+                    ".",
+                    "--config",
+                    "Release",
+                    "--",
+                    "-j",
+                    f"{n_workers}",
+                ],
+                cwd=self.build_lib,
+            )
+        else:
+            subprocess.check_call(
+                ["make", f"-j{n_workers}", f"VERBOSE={verbose}"], cwd=self.build_lib
+            )
 
         # Clean up cmake files when building dist package;
         # otherwise they will get packed into the wheel.
