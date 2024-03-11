@@ -31,12 +31,6 @@
 #include <natten/natten.h>
 #include <natten/cuda/naive/natten_commons.cuh>
 
-// TODO: We're still using ATen's atomic add!
-#include <ATen/ATen.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/extension.h>
-#include <ATen/native/cuda/KernelUtils.cuh>
-
 namespace natten {
 namespace cuda {
 namespace naive {
@@ -44,7 +38,7 @@ namespace naive {
 template <typename scalar_t, typename acc_t>
 struct RelPosBiasGradient2DBase {
   struct Params {
-    acc_t* d_bias;
+    scalar_t* d_bias;
     scalar_t* d_attn;
     int32_t height;
     int32_t width;
@@ -60,7 +54,7 @@ struct RelPosBiasGradient2DBase {
     __device__ __host__ Params() {}
 
     __device__ __host__ Params(
-        acc_t* d_bias,
+        scalar_t* d_bias,
         scalar_t* d_attn,
         int32_t height,
         int32_t width,
@@ -145,8 +139,7 @@ struct RelPosBiasGradient2DFull : RelPosBiasGradient2DBase<scalar_t, acc_t> {
       }
       int64_t index =
           h * p.bias_stride_0 + (pi + ki) * p.bias_stride_1 + (pj + kj);
-      at::native::fastAtomicAdd(
-          p.d_bias, index, p.problem_size, d_rpb_update, true);
+      atomicAdd(p.d_bias + index, d_rpb_update);
     }
   }
 };
@@ -193,8 +186,8 @@ struct RelPosBiasGradient2DHalf : RelPosBiasGradient2DBase<scalar_t, acc_t> {
       }
       int64_t index =
           h * p.bias_stride_0 + (pi + ki) * p.bias_stride_1 + (pj + kj);
-      at::native::fastAtomicAdd(
-          p.d_bias, index, p.problem_size, d_rpb_update, true);
+      fastHalfSpecializedAtomicAdd(
+          p.d_bias, index, p.problem_size, HalfHelper::from_float(d_rpb_update));
     }
   }
 };
@@ -237,7 +230,7 @@ struct RelPosBiasGradient2D {
         (2 * std::get<1>(kernel_size) - 1);
     LaunchParams lp = Kernel::Base::get_launch_params(num_threads);
     auto params = Params(
-        reinterpret_cast<acc_t*>(d_bias_ptr),
+        reinterpret_cast<scalar_t*>(d_bias_ptr),
         reinterpret_cast<scalar_t*>(d_attn_ptr),
         height,
         width,

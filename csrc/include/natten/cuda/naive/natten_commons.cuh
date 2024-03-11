@@ -59,11 +59,9 @@ struct LaunchParams {
 template <typename KernelTemplate>
 __global__ void launch_cuda_kernel(typename KernelTemplate::Params params) {
 #if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ > 300)
-#if (__CUDA_ARCH__ < 600)
-  // Half kernels are not supported in CC < 60,
-  // Partial FP16 support was added in SM54, but
-  // we use atomics, which were only introduced in
-  // SM60, so disabling half kernels for CC < 60.
+#if (__CUDA_ARCH__ < 500)
+  // Half kernels are not supported in CC < 50,
+  // Partial FP16 support was added in SM54.
   // Also disabling tiled kernels, because older
   // architectures might not have enough shared memory
   // and the tiled kernels heavily rely on the assumed
@@ -103,7 +101,7 @@ struct HalfArray;
 template <typename ElementScalar_, typename ElementVector_>
 struct HalfArrayBase;
 
-#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 600)
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 500)
 
 template <>
 struct HalfArrayBase<natten::float16, __half2> {
@@ -123,6 +121,10 @@ struct HalfArrayBase<natten::float16, __half2> {
 
   __device__ __inline__ static float to_float(ElementScalar s) {
     return __half2float(s);
+  }
+
+  __device__ __inline__ static ElementScalar from_float(float s) {
+    return __float2half(s);
   }
 
   __device__ __inline__ static ElementScalar zero() {
@@ -191,6 +193,10 @@ struct HalfArrayBase<natten::bfloat16, __nv_bfloat162> {
 
   __device__ __inline__ static float to_float(ElementScalar s) {
     return __bfloat162float(s);
+  }
+
+  __device__ __inline__ static ElementScalar from_float(float s) {
+    return __float2bfloat16(s);
   }
 
   __device__ __inline__ static ElementScalar zero() {
@@ -394,7 +400,7 @@ struct AttnMask<float> {
   }
 };
 
-#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 600)
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 500)
 template <>
 struct AttnMask<natten::float16> {
   static __device__ auto value(bool is_grad) {
@@ -415,6 +421,100 @@ struct AttnMask<natten::bfloat16> {
 #endif
 
 #endif
+
+// Copied from PyTorch:
+// ATen/native/cuda/KernelUtils.cuh
+//
+// fastSpecializedAtomicAdd (and fastAtomicAdd) are an optimization
+// that speed up half-precision atomics.  The situation with half
+// precision atomics is that we have a slow __half atomic, and
+// a fast vectored __half2 atomic (this can be worth up to a 6x
+// speedup, see https://github.com/pytorch/pytorch/pull/21879).
+// We can convert a __half atomic into a __half2 atomic by simply
+// pairing the __half with a zero entry on the left/right depending
+// on alignment... but only if this wouldn't cause an out of bounds
+// access!  Thus, you must specify tensor and numel so we can check
+// if you would be out-of-bounds and use a plain __half atomic if
+// you would be.
+template <
+    typename scalar_t,
+    typename index_t,
+    typename std::enable_if<std::is_same<natten::float16, scalar_t>::value>::type* =
+        nullptr>
+__device__ __forceinline__ void fastHalfSpecializedAtomicAdd(
+    scalar_t* tensor,
+    index_t index,
+    const index_t numel,
+    scalar_t value) {
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 800)
+#if (__CUDA_ARCH__ < 700)
+  gpuAtomicAddNoReturn(
+      reinterpret_cast<natten::float16*>(tensor) + index,
+      static_cast<natten::float16>(value));
+#else
+  // Accounts for the chance tensor falls on an odd 16 bit alignment (ie, not 32 bit aligned)
+  __half* target_addr = reinterpret_cast<__half*>(tensor + index);
+  bool low_byte = (reinterpret_cast<std::uintptr_t>(target_addr) % sizeof(__half2) == 0);
+
+  if (low_byte && index < (numel - 1)) {
+    __half2 value2;
+    value2.x = static_cast<__half>(value);
+    value2.y = __int2half_rz(0);
+    atomicAdd(reinterpret_cast<__half2*>(target_addr), value2);
+
+  } else if (!low_byte && index > 0) {
+    __half2 value2;
+    value2.x = __int2half_rz(0);
+    value2.y = static_cast<__half>(value);
+    atomicAdd(reinterpret_cast<__half2*>(target_addr - 1), value2);
+
+  } else {
+    atomicAdd(
+        reinterpret_cast<__half*>(tensor) + index, static_cast<__half>(value));
+  }
+#endif
+#else
+  printf("Kernel not supported on this device / CUDA version.\n");
+  asm volatile("brkpt;\n");
+#endif
+}
+
+template <
+    typename scalar_t,
+    typename index_t,
+    typename std::enable_if<std::is_same<natten::bfloat16, scalar_t>::value>::type* =
+        nullptr>
+__device__ __forceinline__ void fastHalfSpecializedAtomicAdd(
+    scalar_t* tensor,
+    index_t index,
+    const index_t numel,
+    scalar_t value) {
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 800)
+  // Accounts for the chance tensor falls on an odd 16 bit alignment (ie, not 32 bit aligned)
+  __nv_bfloat16* target_addr = reinterpret_cast<__nv_bfloat16*>(tensor + index);
+  bool low_byte = (reinterpret_cast<std::uintptr_t>(target_addr) % sizeof(__nv_bfloat162) == 0);
+
+  if (low_byte && index < (numel - 1)) {
+    __nv_bfloat162 value2;
+    value2.x = *reinterpret_cast<__nv_bfloat16*>(&value);
+    value2.y = __int2bfloat16_rz(0);
+    atomicAdd(reinterpret_cast<__nv_bfloat162*>(target_addr), value2);
+
+  } else if (!low_byte && index > 0) {
+    __nv_bfloat162 value2;
+    value2.x = __int2bfloat16_rz(0);
+    value2.y = *reinterpret_cast<__nv_bfloat16*>(&value);
+    atomicAdd(reinterpret_cast<__nv_bfloat162*>(target_addr - 1), value2);
+
+  } else {
+    atomicAdd(
+        reinterpret_cast<__nv_bfloat16*>(tensor) + index, *reinterpret_cast<__nv_bfloat16*>(&value));
+  }
+#else
+  printf("Kernel not supported on this device / CUDA version.\n");
+  asm volatile("brkpt;\n");
+#endif
+}
 
 } // namespace naive
 } // namespace cuda
