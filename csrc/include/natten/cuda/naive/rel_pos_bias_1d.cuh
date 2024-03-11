@@ -38,7 +38,7 @@ namespace naive {
 template <typename scalar_t, typename acc_t>
 struct RelPosBiasGradient1DBase {
   struct Params {
-    scalar_t* d_bias;
+    acc_t* d_bias;
     scalar_t* d_attn;
     int32_t length;
     int32_t heads;
@@ -53,7 +53,7 @@ struct RelPosBiasGradient1DBase {
     __device__ __host__ Params() {}
 
     __device__ __host__ Params(
-        scalar_t* d_bias,
+        acc_t* d_bias,
         scalar_t* d_attn,
         int32_t length,
         int32_t heads,
@@ -152,8 +152,7 @@ struct RelPosBiasGradient1DHalf : RelPosBiasGradient1DBase<scalar_t, acc_t> {
         attnOffset += p.attn_stride_0;
       }
       int64_t index = h * p.bias_stride_0 + (pi + ki);
-      fastHalfSpecializedAtomicAdd(
-          p.d_bias, index, p.problem_size, HalfHelper::from_float(d_rpb_update));
+      atomicAdd(p.d_bias + index, d_rpb_update);
     }
   }
 };
@@ -191,7 +190,7 @@ struct RelPosBiasGradient1D {
     int64_t problem_size = heads * (2 * std::get<0>(kernel_size) - 1);
     LaunchParams lp = Kernel::Base::get_launch_params(num_threads);
     auto params = Params(
-        reinterpret_cast<scalar_t*>(d_bias_ptr),
+        reinterpret_cast<acc_t*>(d_bias_ptr),
         reinterpret_cast<scalar_t*>(d_attn_ptr),
         length,
         heads,
