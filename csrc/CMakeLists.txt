@@ -1,5 +1,11 @@
 # Copyright (c) 2022-2024 Ali Hassani.
 
+if(${NATTEN_IS_WINDOWS})
+  set(CMAKE_GENERATOR "Ninja")
+	message("CMake generator set to: ${CMAKE_GENERATOR}")
+endif()
+
+
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 if(${NATTEN_WITH_CUDA})
 project(natten LANGUAGES CXX CUDA)
@@ -97,6 +103,17 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
 
+
+if(${NATTEN_IS_WINDOWS})
+  # Copied from xformers
+  set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} /MP /Zc:lambda /Zc:preprocessor")
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler /Zc:lambda -Xcompiler /Zc:preprocessor")
+  set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG} /MP /Zc:lambda /Zc:preprocessor")
+  set(CMAKE_CUDA_FLAGS_DEBUG "-Xcompiler /Zc:lambda -Xcompiler /Zc:preprocessor")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MP /Zc:lambda /Zc:preprocessor")
+  set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler /Zc:lambda -Xcompiler /Zc:preprocessor")
+endif()
+
 message("CMAKE_CUDA_FLAGS_RELEASE: ${CMAKE_CUDA_FLAGS_RELEASE}")
 if(${NATTEN_WITH_CUDA})
   message("CUDA compiler: " ${CMAKE_CUDA_COMPILER})
@@ -179,9 +196,11 @@ include_directories(${COMMON_HEADER_DIRS})
 # Find torch lib dir so we can link with libtorch
 link_directories("${TORCH_DIR}/lib/")
 
-if(NATTEN_IS_WINDOWS)
-  link_directories("${PY_LIBS_DIR}")
-endif()
+# TODO: Is this needed?
+## Windows builds require linking python's lib path
+#if(NATTEN_IS_WINDOWS)
+#  link_directories("${PY_LIB_DIR}")
+#endif()
 
 add_library(natten SHARED ${ALL_SOURCES})
 
