@@ -1,11 +1,5 @@
 # Copyright (c) 2022-2024 Ali Hassani.
 
-if(${NATTEN_IS_WINDOWS})
-  set(CMAKE_GENERATOR "Ninja")
-	message("CMake generator set to: ${CMAKE_GENERATOR}")
-endif()
-
-
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 if(${NATTEN_WITH_CUDA})
 project(natten LANGUAGES CXX CUDA)
@@ -196,11 +190,10 @@ include_directories(${COMMON_HEADER_DIRS})
 # Find torch lib dir so we can link with libtorch
 link_directories("${TORCH_DIR}/lib/")
 
-# TODO: Is this needed?
-## Windows builds require linking python's lib path
-#if(NATTEN_IS_WINDOWS)
-#  link_directories("${PY_LIB_DIR}")
-#endif()
+# Windows builds require linking with python*.lib
+if(NATTEN_IS_WINDOWS)
+  link_directories("${PY_LIB_DIR}")
+endif()
 
 add_library(natten SHARED ${ALL_SOURCES})
 
