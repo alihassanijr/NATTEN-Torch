@@ -25,7 +25,7 @@ We plan to port our naive kernels to metal soon, but we certainly welcome contri
 NATTEN does not come with Windows releases yet, but you can build it from source.
 If you're using WSL, please follow the same steps as building for Linux below.
 
-If you're building with MSVC, please refer to [Build with MSVC](#Build with MSVC).
+If you're building with MSVC, please refer to [Build with MSVC](#Build-with-MSVC).
 
 ### Building from source
 In order to build from source, please make sure that you have your preferred PyTorch build installed,
@@ -65,7 +65,8 @@ make test
 ```
 
 #### Build with MSVC
-NOTE: Windows builds are experimental and not regularly tested.
+**NOTE: Windows builds are experimental and not regularly tested.**
+
 
 To build with MSVC, please open the "Native Tools Command Prompt for Visual Studio".
 The exact name may depend on your version of Windows, Visual Studio, and cpu architecture (in our case it was x64 Native Tools
@@ -83,7 +84,7 @@ WindowsBuilder.bat install
 WindowsBuilder.bat install WORKERS=8
 
 # Build targeting SM89 (Ada Lovelace)
-WindowsBuilder.bat install CUDA_ARCH="8.9"
+WindowsBuilder.bat install CUDA_ARCH=8.9
 ```
 
 Note that depending on how many workers you end up using, build time may vary, and the MSVC compiler tends to throw plenty of
@@ -93,6 +94,21 @@ Once it's done building, it is highly recommended to run the unit tests to make 
 ```
 WindowsBuilder.bat test
 ```
+
+##### PyTorch issue: nvToolsExt not found
+Windows users may come across this issue when building NATTEN from source with CUDA 12.0 and newer.
+The build process fails with an error indicating "nvtoolsext" cannot be found on your system.
+This is because nvtoolsext binaries are no longer part of the CUDA toolkit for Windows starting CUDA 12.0, but the PyTorch
+cmake still looks for it (as of torch==2.2.1).
+
+The only workaround is to modify the following files:
+```
+$PATH_TO_YOUR_PYTHON_ENV\Lib\site-packages\torch\share\cmake\Torch\TorchConfig.cmake
+$PATH_TO_YOUR_PYTHON_ENV\Lib\site-packages\torch\share\cmake\Torch\Caffe2Targets.cmake
+$PATH_TO_YOUR_PYTHON_ENV\Lib\site-packages\torch\share\cmake\Caffe2\public\cuda.cmake
+```
+
+find all mentions of nvtoolsext (or nvToolsExt), and comment them out, to get past it.
 
 ### NGC docker images
 NATTEN supports PyTorch builds that are built from source, an example of which is the builds that ship with
