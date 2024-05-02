@@ -27,6 +27,7 @@ from torch import Tensor
 
 from ..context import (
     AutotunerContext,
+    disable_autotuner,
     is_autotuner_enabled,
     is_autotuner_enabled_for_backward,
     is_autotuner_enabled_for_forward,
@@ -179,7 +180,11 @@ def autotune_fna(
         na_dim, input_tensor, dilation
     )
 
-    if not is_autotuner_enabled() or torch.are_deterministic_algorithms_enabled():
+    if not is_autotuner_enabled() or torch.are_deterministic_algorithms_enabled() or torch.compiler.is_dynamo_compiling:
+        if torch.compiler.is_dynamo_compiling and is_autotuner_enabled():
+            logger.warn("NATTEN auto-tuner cannot be used with torch.compile. Overriding auto-tuner flag to default.")
+            disable_autotuner()
+
         return best_forward_config, best_backward_config
 
     assert is_autotuner_enabled_for_forward() or is_autotuner_enabled_for_backward()

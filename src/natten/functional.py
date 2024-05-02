@@ -27,6 +27,7 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.cuda.amp import custom_bwd, custom_fwd
 
+from .backend import *
 try:
     from natten import libnatten  # type: ignore
 except ImportError:
@@ -1190,12 +1191,6 @@ class FusedNeighborhoodAttention1D(Function):
         return output
 
     @staticmethod
-    def jvp(ctx, *grad_inputs: Any) -> Tensor:
-        raise NotImplementedError(
-            "Fused neighborhood attention does not support forward-mode AD yet."
-        )
-
-    @staticmethod
     @custom_bwd
     def backward(ctx, grad_out: Tensor) -> Tuple[
         Tensor,
@@ -1296,13 +1291,13 @@ class FusedNeighborhoodAttention2D(Function):
         value = value.contiguous()
         if bias is not None:
             bias = bias.to(query.dtype).contiguous()
-        output = torch.empty_like(value)
+        #output = torch.empty_like(value)
         logsumexp = torch.empty(
             query.shape[:-1], dtype=torch.float32, device=query.device
         )
 
-        libnatten.na2d_forward(
-            output,
+        output = torch.ops.natten.na2d_forward.default(
+        #libnatten.na2d_forward(
             query,
             key,
             value,
@@ -1325,12 +1320,6 @@ class FusedNeighborhoodAttention2D(Function):
         ctx.has_bias = bias is not None
 
         return output
-
-    @staticmethod
-    def jvp(ctx, *grad_inputs: Any) -> Tensor:
-        raise NotImplementedError(
-            "Fused neighborhood attention does not support forward-mode AD yet."
-        )
 
     @staticmethod
     @custom_bwd
@@ -1462,12 +1451,6 @@ class FusedNeighborhoodAttention3D(Function):
         ctx.has_bias = bias is not None
 
         return output
-
-    @staticmethod
-    def jvp(ctx, *grad_inputs: Any) -> Tensor:
-        raise NotImplementedError(
-            "Fused neighborhood attention does not support forward-mode AD yet."
-        )
 
     @staticmethod
     @custom_bwd
