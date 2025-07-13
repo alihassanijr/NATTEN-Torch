@@ -38,6 +38,7 @@ from . import (
 
 from .profiling_utils import (
     generate_problem,
+    measure_natten_runtime,
     print_table,
     profile_fmha_with_torch,
     profile_na_with_torch,
@@ -84,7 +85,7 @@ def do_profile(
     backward_kv_tile_size: Optional[int] = None,
     warmup_steps: int = 5,
     backprop: bool = False,
-    max_retries: int = 5,
+    max_retries: int = 2,
     fail_on_capture_error: bool = True,
 ):
     if backend is None or backend in NATTEN_BACKENDS:
@@ -143,23 +144,52 @@ def do_profile(
             break
 
     if fail_on_capture_error and (logged_ops is None or len(logged_ops) < 1):
-        raise RuntimeError(
-            f"Nothing was measured during profiling after {max_retries} retries. "
-            "Please open an issue and copy paste the following information:\n"
-            f"{problem=},\n"
-            f"{backend=},\n"
-            f"{fmha_backend=},\n"
-            f"{q_tile_shape=},\n"
-            f"{kv_tile_shape=},\n"
-            f"{backward_q_tile_shape=},\n"
-            f"{backward_kv_tile_shape=},\n"
-            f"{persistent=},\n"
-            f"{torch_compile=},\n"
-            f"{kernel_schedule=},\n"
-            f"{warmup_steps=},\n"
-            f"{backprop=},\n"
-            f"{logged_ops=},\n"
-        )
+        if backend is None or backend in NATTEN_BACKENDS:
+            logger.warning(f"Nothing was measured during profiling after {max_retries} retries.\n"
+                           "Reporting total runtime measured with CUDA events instead.\n")
+            runtime = measure_natten_runtime(
+                problem=problem,
+                warmup_steps=warmup_steps,
+                disable_backward=not backprop,
+                backend=backend,
+                fmha_backend=fmha_backend,
+                q_tile_shape=q_tile_shape,
+                kv_tile_shape=kv_tile_shape,
+                backward_q_tile_shape=backward_q_tile_shape,
+                backward_kv_tile_shape=backward_kv_tile_shape,
+                run_persistent_kernel=persistent,
+                torch_compile=torch_compile,
+                kernel_schedule=kernel_schedule,
+                q_tile_size=q_tile_size,
+                kv_tile_size=kv_tile_size,
+                backward_q_tile_size=backward_q_tile_size,
+                backward_kv_tile_size=backward_kv_tile_size,
+            )
+            logged_ops = [
+                Result(
+                    op=None,
+                    op_str="Total runtime",
+                    time=runtime * 1e3,
+                )
+            ]
+        else:
+            raise RuntimeError(
+                f"Nothing was measured during profiling after {max_retries} retries. "
+                "Please open an issue and copy paste the following information:\n"
+                f"{problem=},\n"
+                f"{backend=},\n"
+                f"{fmha_backend=},\n"
+                f"{q_tile_shape=},\n"
+                f"{kv_tile_shape=},\n"
+                f"{backward_q_tile_shape=},\n"
+                f"{backward_kv_tile_shape=},\n"
+                f"{persistent=},\n"
+                f"{torch_compile=},\n"
+                f"{kernel_schedule=},\n"
+                f"{warmup_steps=},\n"
+                f"{backprop=},\n"
+                f"{logged_ops=}.\n"
+            )
 
     return logged_ops
 
