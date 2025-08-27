@@ -31,12 +31,9 @@ is 8 x 16 x 24, and we have head dim 128:
 
 ```bash
 python -m natten.profiler \
-    -i 8 16 24 \ #(1)!
-    -d 128 #(2)!
+    -i 8 16 24 \
+    -d 128
 ```
-
-1. Token layout (feature map) shape: `(8, 16, 24)`
-2. Head dim 128
 
 This will report the default [self attention][natten.attention] time.
 Now let's say we want to profile this with window size 2 x 4 x 3.
@@ -207,16 +204,13 @@ Factors that determine those include, but are not limited to:
 Due to this, we highly recommend first trying to understand what options you have, by using the
 profiler's *dry run* mode:
 
-```shell title="Dry run for bf16 3D problem, with head dim 128"
+```shell title="Dry run for bf16 3D problem (16x16x16 feature map), with head dim 128"
 python -m natten.profiler \
     --dry-run \
     --dtype bf16 \
-    -i 16 16 16 \ #(1)!
-    -d 128   #(2)!
+    -i 16 16 16 \
+    -d 128
 ```
-
-1. Sample feature map shape `(16, 16, 16)`
-2. 128 head dim
 
 Since a backend was not specified, profiler will first detect all compatible backends with the
 specified options for your default GPU, and print out compatible tile shapes for each available
