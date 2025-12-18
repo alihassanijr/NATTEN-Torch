@@ -45,6 +45,7 @@
 namespace cutlass::fna::collective {
 
 using namespace cute;
+using namespace cutlass::fmha::collective;
 
 template <
     class Element_,
@@ -58,6 +59,7 @@ template <
     class QTileShape_,
     class KVTileShape_,
     class NADim_,
+    bool IsVarlen,
     // shape here is QG K H
     // and referes to the two softmax warps
     // (2, 1, 1) means that they are stacked (best for large Q since it loads
@@ -77,9 +79,9 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
   using StrideV = StrideV_;
   using Mask = Mask_;
 
+  using NADim = NADim_;
   using QTileShape = QTileShape_;
   using KVTileShape = KVTileShape_;
-  using MultiDimTileShape = cute::tuple<QTileShape, KVTileShape>;
 
   static_assert(
       size(QTileShape{}) == get<0>(TileShape{}),
@@ -238,7 +240,8 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       TileShape,
       QTileShape,
       KVTileShape,
-      NADim_>;
+      NADim_,
+      IsVarlen>;
 
   struct Arguments {
     typename Load::Arguments load;
@@ -268,15 +271,32 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
   static bool can_implement(
       ProblemShape const& problem_shape,
       Arguments const& args) {
-    return evenly_divides(args.load.q_shape, QTileShape{}) &&
-        evenly_divides(args.load.kv_shape, KVTileShape{}) &&
-        evenly_divides(
-               size<3, 1>(problem_shape),
-               size(args.load.dilation)) && // dilation groups are
-                                            // folded into batch
-        tuple_leq(args.load.window_size, args.load.qkv_shape) &&
-        // TODO: check window size * dilation <= qkv shape
-        tuple_leq(args.load.stride, args.load.window_size);
+    if constexpr (IsVarlen) {
+      // variable-dilations needs the extra batch map tensor
+      if (args.load.dilations_ptr != nullptr &&
+          args.load.batch_map_ptr == nullptr) {
+        return false;
+      }
+
+      // NA parameter verification is done during metadata construction
+      // (host-side, ahead of time)
+      if (args.load.strides_ptr == nullptr &&
+          args.load.window_sizes_ptr == nullptr) {
+        return tuple_leq(args.load.stride, args.load.window_size);
+      }
+
+      return args.load.token_layout_ptr != nullptr;
+    } else {
+      return evenly_divides(args.load.q_shape, QTileShape{}) &&
+          evenly_divides(args.load.kv_shape, KVTileShape{}) &&
+          evenly_divides(
+                 size<3, 1>(problem_shape),
+                 size(args.load.dilation)) && // dilation groups are
+                                              // folded into batch
+          tuple_leq(args.load.window_size, args.load.qkv_shape) &&
+          // TODO: check window size * dilation <= qkv shape
+          tuple_leq(args.load.stride, args.load.window_size);
+    }
   }
 
   template <class ProblemShape>
@@ -345,24 +365,18 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
     auto pipeline_q_release_state = pipeline_q_consumer_state;
     auto pipeline_kv_release_state = pipeline_kv_consumer_state;
 
-    auto qkv_shape = params.load.qkv_shape;
-    if (params.load.requires_qkv_fixup) {
-      qkv_shape = Mask{}.correct_qkv_shape(
-          problem_shape,
-          params.load.qkv_shape,
-          blk_coord,
-          params.load.dilation,
-          params.load.num_dilation_groups);
-    } else if (params.load.is_dilated) {
-      qkv_shape = ceil_div(params.load.qkv_shape, params.load.dilation);
-    }
+    auto
+        [qkv_shape,
+         q_shape,
+         kv_shape,
+         na_params,
+         is_fully_block_sparse,
+         has_padding] =
+            update_params<IsVarlen, /* IsBackward = */ false, Mask>(
+                params.load, blk_coord, problem_shape);
 
-    int mask_tile_count = size(get<1>(Mask{}.get_trip_count(
-        blk_coord,
-        MultiDimTileShape{},
-        params.load.q_shape,
-        qkv_shape,
-        params.load.na_params)));
+    int mask_tile_count = size(get<1>(
+        Mask{}.get_trip_count(blk_coord, q_shape, qkv_shape, na_params)));
 
     typename CollectiveMmaQK::TiledMma mma_qk;
     ThrMMA thr_mma_qk = mma_qk.get_slice(0);
@@ -614,13 +628,16 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       class BlkCoord,
       class CoordTensor,
       class ProblemShape,
-      class NADim>
+      class NADim,
+      class NAParams>
   CUTLASS_DEVICE auto softmax_step(
       NADim const& qkv_shape,
       bool is_fully_block_sparse,
-      bool has_kv_padding,
+      bool has_padding,
       NADim const& kv_offset,
       NADim const& kv_tiles,
+      NADim const& q_shape,
+      NAParams const& na_params,
       float& row_max,
       float& row_sum,
       Stage stage,
@@ -697,19 +714,17 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
         Mask{}.apply_mask(
             tTMEM_LOADrS,
             tTMEM_LOADcS,
-            MultiDimTileShape{},
-            params.load.q_shape,
+            q_shape,
             qkv_shape,
-            params.load.na_params,
+            na_params,
             kv_offset,
             kv_tiles);
-      } else if (has_kv_padding) {
+      } else if (has_padding) {
         Mask{}.apply_padded_mask(
             tTMEM_LOADrS,
             tTMEM_LOADcS,
-            MultiDimTileShape{},
             qkv_shape,
-            params.load.na_params,
+            na_params,
             kv_offset,
             kv_tiles);
       }
@@ -871,40 +886,18 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       PipelineC& pipeline_c,
       typename PipelineC::PipelineState& pipeline_c_producer_state,
       OrderBarrierSoftmax& order_s) {
-    auto qkv_shape = params.load.qkv_shape;
-    bool is_fully_block_sparse = params.load.is_fully_block_sparse;
-    bool has_kv_padding = params.load.has_kv_padding;
-    if (params.load.requires_qkv_fixup) {
-      qkv_shape = Mask{}.correct_qkv_shape(
-          problem_shape,
-          params.load.qkv_shape,
-          blk_coord,
-          params.load.dilation,
-          params.load.num_dilation_groups);
-      is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
-          qkv_shape,
-          get<0>(params.load.na_params),
-          get<3>(params.load.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_kv_padding = not evenly_divides(qkv_shape, KVTileShape{});
-    } else if (params.load.is_dilated) {
-      qkv_shape = ceil_div(params.load.qkv_shape, params.load.dilation);
-      is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
-          qkv_shape,
-          get<0>(params.load.na_params),
-          get<3>(params.load.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_kv_padding = not evenly_divides(qkv_shape, KVTileShape{});
-    }
+    auto
+        [qkv_shape,
+         q_shape,
+         kv_shape,
+         na_params,
+         is_fully_block_sparse,
+         has_padding] =
+            update_params<IsVarlen, /* IsBackward = */ false, Mask>(
+                params.load, blk_coord, problem_shape);
 
-    auto [kv_offset, num_tiles] = Mask{}.get_trip_count(
-        blk_coord,
-        MultiDimTileShape{},
-        params.load.q_shape,
-        qkv_shape,
-        params.load.na_params);
+    auto [kv_offset, num_tiles] =
+        Mask{}.get_trip_count(blk_coord, q_shape, qkv_shape, na_params);
     int mask_tile_count = size(num_tiles);
 
     ElementQK row_max = -INFINITY;
@@ -925,9 +918,11 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       softmax_step<true /* need_apply_mask */>(
           qkv_shape,
           is_fully_block_sparse,
-          has_kv_padding,
+          has_padding,
           kv_offset,
           num_tiles,
+          q_shape,
+          na_params,
           row_max,
           row_sum,
           stage,
@@ -1145,12 +1140,14 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
   template <
       class BlkCoord,
       class ProblemShape,
+      class ParamsProblemShape,
       class TensorStorageEpi,
       class CollectiveEpilogue>
   CUTLASS_DEVICE auto correction(
       BlkCoord const& blk_coord,
       Params const& params,
       ProblemShape const& problem_shape,
+      ParamsProblemShape const& params_problem_shape,
       TensorStorageEpi& shared_storage_epi,
       PipelineC& pipeline_s0_c,
       typename PipelineC::PipelineState& pipeline_s0_c_consumer_state,
@@ -1161,24 +1158,18 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       PipelineE& pipeline_epi,
       typename PipelineE::PipelineState& pipeline_epi_producer_state,
       CollectiveEpilogue& epilogue) {
-    auto qkv_shape = params.load.qkv_shape;
-    if (params.load.requires_qkv_fixup) {
-      qkv_shape = Mask{}.correct_qkv_shape(
-          problem_shape,
-          params.load.qkv_shape,
-          blk_coord,
-          params.load.dilation,
-          params.load.num_dilation_groups);
-    } else if (params.load.is_dilated) {
-      qkv_shape = ceil_div(params.load.qkv_shape, params.load.dilation);
-    }
+    auto
+        [qkv_shape,
+         q_shape,
+         kv_shape,
+         na_params,
+         is_fully_block_sparse,
+         has_padding] =
+            update_params<IsVarlen, /* IsBackward = */ false, Mask>(
+                params.load, blk_coord, problem_shape);
 
-    int mask_tile_count = size(get<1>(Mask{}.get_trip_count(
-        blk_coord,
-        MultiDimTileShape{},
-        params.load.q_shape,
-        qkv_shape,
-        params.load.na_params)));
+    int mask_tile_count = size(get<1>(
+        Mask{}.get_trip_count(blk_coord, q_shape, qkv_shape, na_params)));
 
     int thread_idx = threadIdx.x % (4 * cutlass::NumThreadsPerWarp);
 
@@ -1318,11 +1309,18 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       int row_idx =
           get<0>(tTMEM_LOADVcS(_0{})) + get<0>(TileShape{}) * get<0>(blk_coord);
 
+      int row_offset = 0;
+      if constexpr (is_variable_length_v<
+                        tuple_element_t<0, ParamsProblemShape>>) {
+        row_offset = get<0>(params_problem_shape)
+                         .cumulative_length[get<2, 1>(blk_coord)];
+      }
+
       ElementPV lse = cutlass::fast_log(tTMEM_LOADVrS(kIdxFinalRowSum)) +
           params.scale_softmax * tTMEM_LOADVrS(kIdxFinalRowMax);
 
       if (row_idx < get<0>(problem_shape)) {
-        gLSE(row_idx, get<2>(blk_coord)) = lse;
+        gLSE(row_idx + row_offset, get<2>(blk_coord)) = lse;
       }
     }
 
@@ -1355,8 +1353,15 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       ElementPV lse = cutlass::fast_log(tTMEM_LOADVrS(kIdxFinalRowSum)) +
           params.scale_softmax * tTMEM_LOADVrS(kIdxFinalRowMax);
 
+      int row_offset = 0;
+      if constexpr (is_variable_length_v<
+                        tuple_element_t<0, ParamsProblemShape>>) {
+        row_offset = get<0>(params_problem_shape)
+                         .cumulative_length[get<2, 1>(blk_coord)];
+      }
+
       if (row_idx < get<0>(problem_shape)) {
-        gLSE(row_idx, get<2>(blk_coord)) = lse;
+        gLSE(row_idx + row_offset, get<2>(blk_coord)) = lse;
       }
     }
 
@@ -1424,8 +1429,15 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
     if (epilogue.params.ptr_LSE != nullptr) {
       int row_idx = thread_idx + get<0>(TileShape{}) * get<0>(blk_coord);
 
+      int row_offset = 0;
+      if constexpr (is_variable_length_v<
+                        tuple_element_t<0, ParamsProblemShape>>) {
+        row_offset = get<0>(params_problem_shape)
+                         .cumulative_length[get<2, 1>(blk_coord)];
+      }
+
       if (row_idx < get<0>(problem_shape)) {
-        gLSE(row_idx, get<2>(blk_coord)) = lse;
+        gLSE(row_idx + row_offset, get<2>(blk_coord)) = lse;
       }
     }
 
@@ -1440,8 +1452,15 @@ struct Sm100FnaFwdMainloopTmaWarpspecialized {
       int row_idx = thread_idx + get<0>(TileShape{}) * get<0>(blk_coord) +
           get<0>(TileShapeQK{});
 
+      int row_offset = 0;
+      if constexpr (is_variable_length_v<
+                        tuple_element_t<0, ParamsProblemShape>>) {
+        row_offset = get<0>(params_problem_shape)
+                         .cumulative_length[get<2, 1>(blk_coord)];
+      }
+
       if (row_idx < get<0>(problem_shape)) {
-        gLSE(row_idx, get<2>(blk_coord)) = lse;
+        gLSE(row_idx + row_offset, get<2>(blk_coord)) = lse;
       }
     }
 

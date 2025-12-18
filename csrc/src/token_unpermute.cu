@@ -111,7 +111,7 @@ void token_unpermute_generic(
       "Token unpermute input and output dims must match, got ",
       "output.shape[-1]=",
       out.size(2 + kNADim),
-      ", input.shape[-2]=",
+      ", input.shape[-1]=",
       in.size(3));
 
   int batch = in.size(0);
@@ -142,7 +142,7 @@ void token_unpermute_generic(
           (is_fp8_allowed &&
            (in.scalar_type() == c10::ScalarType::Float8_e4m3fn ||
             in.scalar_type() == c10::ScalarType::Float8_e5m2)),
-      "Only FP32, FP16, BF16, and FP8 operands are supported for now.");
+      "Token Unpermute only supports FP32, FP16, BF16, and FP8 operands (Blackwell DC-class only) for now.");
 
   bool success = false;
   if (in.scalar_type() == torch::kFloat32) {

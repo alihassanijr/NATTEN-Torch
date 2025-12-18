@@ -48,6 +48,7 @@ namespace cutlass::fna::kernel {
 
 using namespace cute;
 using namespace cutlass::fna::collective;
+using namespace cutlass::fmha::collective;
 
 struct Sm100FnaCtxKernelWarpspecializedSchedule {
   enum class WarpRole {
@@ -98,6 +99,8 @@ template <
     class TileScheduler,
     class KernelSchedule = Sm100FnaCtxKernelWarpspecializedSchedule>
 struct Sm100FnaFwdKernelTmaWarpspecialized {
+  using BatchMap = typename CollectiveMainloop::Load::BatchMap;
+
   using TileShape = typename CollectiveMainloop::TileShape;
   using ProblemShape = ProblemShapeIn;
 
@@ -235,7 +238,7 @@ struct Sm100FnaFwdKernelTmaWarpspecialized {
       const Params& params,
       ProblemShape const& problem_shape,
       int batch_idx) {
-    return params.problem_shape;
+    return apply_variable_length(params.problem_shape, batch_idx);
   }
 
   CUTLASS_DEVICE void operator()(const Params& params, char* smem) {
@@ -560,6 +563,7 @@ struct Sm100FnaFwdKernelTmaWarpspecialized {
             blk_coord,
             params.mainloop,
             logical_problem_shape,
+            params.problem_shape,
             epilogue_storage,
             pipeline_s0_corr,
             pipeline_s0_corr_consumer_state,
