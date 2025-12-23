@@ -350,7 +350,7 @@ def attention(
 
 def merge_attentions(
     outputs: List[Tensor], lse_tensors: List[Tensor], torch_compile: bool = True
-) -> Tensor:
+) -> Tuple[Tensor, Tensor]:
     """Takes multiple attention *outputs* originating from the same query tensor, and their
     corresponding logsumexps, and merges them as if their context (key/value pair) had been
     concatenated.
@@ -373,6 +373,8 @@ def merge_attentions(
 
     Returns:
         output (Tensor): merged attention output.
+
+        logsumexp (Tensor): updated logsumexp.
     """
 
     if len(outputs) < 2:
@@ -447,7 +449,8 @@ def neighborhood_attention_generic(
     run_persistent_kernel: bool = True,
     kernel_schedule: Optional[Union[str, KernelSchedule]] = None,
     torch_compile: bool = False,
-) -> Tensor:
+    return_lse: bool = False,
+) -> Union[Tensor, Tuple[Tensor, Tensor]]:
 
     na_tensor_checks(query, key, value)
     additional_kv_tensor_checks(query, key, value, additional_keys, additional_values)
@@ -496,24 +499,31 @@ def neighborhood_attention_generic(
             value = torch.cat([value, additional_values], dim=1)
 
         attn_kwargs = attention_kwargs or {}
-        out: Tensor = attention(  # type: ignore[assignment]
+        out, lse = attention(
             query,
             key,
             value,
             is_causal=is_causal[0],  # NOTE: special case
             scale=scale,
-            return_lse=False,
+            return_lse=True,
             **attn_kwargs,
         )
-        output_shape = [s for s in query_shape[:-1]] + [value.shape[-1]]
-        return out.reshape(*output_shape)
+        lse_shape = [s for s in query_shape[:-1]]
+        output_shape = lse_shape + [value.shape[-1]]
+        out = out.reshape(*output_shape)
+        lse = lse.reshape(*lse_shape)
+
+        if return_lse:
+            return out, lse
+
+        return out
 
     scale = scale or query.shape[-1] ** -0.5
 
     backend = backend or choose_backend(query, key, value, torch_compile=torch_compile)
 
     if backend == "blackwell-fna":
-        outputs = cutlass_blackwell_fna_generic(
+        output, lse = cutlass_blackwell_fna_generic(
             query=query,
             key=key,
             value=value,
@@ -527,11 +537,11 @@ def neighborhood_attention_generic(
             backward_q_tile_shape=backward_q_tile_shape,
             backward_kv_tile_shape=backward_kv_tile_shape,
             run_persistent_kernel=run_persistent_kernel,
-            return_lse=has_additional_attention,
+            return_lse=True,
         )
 
     elif backend == "hopper-fna":
-        outputs = cutlass_hopper_fna_generic(
+        output, lse = cutlass_hopper_fna_generic(
             query=query,
             key=key,
             value=value,
@@ -545,11 +555,11 @@ def neighborhood_attention_generic(
             backward_q_tile_shape=backward_q_tile_shape,
             backward_kv_tile_shape=backward_kv_tile_shape,
             kernel_schedule=kernel_schedule,
-            return_lse=has_additional_attention,
+            return_lse=True,
         )
 
     elif backend == "cutlass-fna":
-        outputs = cutlass_fna_generic(
+        output, lse = cutlass_fna_generic(
             query=query,
             key=key,
             value=value,
@@ -564,11 +574,11 @@ def neighborhood_attention_generic(
             backward_kv_tile_shape=backward_kv_tile_shape,
             backward_kv_splits=backward_kv_splits,
             backward_use_pt_reduction=backward_use_pt_reduction,
-            return_lse=has_additional_attention,
+            return_lse=True,
         )
 
     elif backend == "flex-fna":
-        outputs = flex_fna_generic(
+        output, lse = flex_fna_generic(
             query=query,
             key=key,
             value=value,
@@ -580,7 +590,7 @@ def neighborhood_attention_generic(
             q_tile_shape=q_tile_shape,
             kv_tile_shape=kv_tile_shape,
             torch_compile=torch_compile,
-            return_lse=has_additional_attention,
+            return_lse=True,
         )
 
     else:
@@ -589,8 +599,6 @@ def neighborhood_attention_generic(
     if has_additional_attention:
         assert additional_keys is not None
         assert additional_values is not None
-        assert outputs is not None and isinstance(outputs, tuple) and len(outputs) == 2
-        out, lse = outputs
 
         attention_kwargs = attention_kwargs or {}
         additional_output, additional_lse = attention(
@@ -603,15 +611,22 @@ def neighborhood_attention_generic(
             **attention_kwargs,
         )
 
-        merged_output = merge_attentions(
-            [out.flatten(1, na_dim), additional_output],
+        merged_output, merged_lse = merge_attentions(
+            [output.flatten(1, na_dim), additional_output],
             [lse.flatten(1, na_dim), additional_lse],
         )
-        return merged_output.reshape(out.shape)
+        merged_output = merged_output.reshape(output.shape)
+        merged_lse = merged_lse.reshape(output.shape[:-1])
 
-    assert isinstance(outputs, Tensor)
+        if return_lse:
+            return merged_output, merged_lse
 
-    return outputs
+        return merged_output
+
+    if return_lse:
+        return output, lse
+
+    return output
 
 
 def na1d(
@@ -636,7 +651,8 @@ def na1d(
     run_persistent_kernel: bool = True,
     kernel_schedule: Optional[Union[str, KernelSchedule]] = None,
     torch_compile: bool = False,
-) -> Tensor:
+    return_lse: bool = False,
+) -> Union[Tensor, Tuple[Tensor, Tensor]]:
     """Computes 1-D neighborhood attention.
 
     GQA/MQA support (`heads != heads_kv`) is available. For now, `blackwell-fna` and
@@ -766,9 +782,15 @@ def na1d(
                 )
                 ```
 
+        return_lse (bool): Whether or not to return the `logsumexp` tensor. `logsumexp` can be used
+            in the backward pass, and for [attention merging][natten.merge_attentions].
+
     Returns:
         output (Tensor): 4-D output tensor, with the heads last layout
             (`[batch, seqlen, heads, head_dim_v]`).
+
+        logsumexp (Tensor): only returned when `return_lse=True`. 3-D logsumexp tensor, with the
+            heads last layout (`[batch, seqlen, heads]`).
     """
     return neighborhood_attention_generic(
         query=query,
@@ -817,7 +839,8 @@ def na2d(
     run_persistent_kernel: bool = True,
     kernel_schedule: Optional[Union[str, KernelSchedule]] = None,
     torch_compile: bool = False,
-) -> Tensor:
+    return_lse: bool = False,
+) -> Union[Tensor, Tuple[Tensor, Tensor]]:
     """Computes 2-D neighborhood attention.
 
     GQA/MQA support (`heads != heads_kv`) is available. For now, `blackwell-fna` and
@@ -957,9 +980,15 @@ def na2d(
                 )
                 ```
 
+        return_lse (bool): Whether or not to return the `logsumexp` tensor. `logsumexp` can be used
+            in the backward pass, and for [attention merging][natten.merge_attentions].
+
     Returns:
         output (Tensor): 5-D output tensor, with the heads last layout
             (`[batch, X, Y, heads, head_dim_v]`).
+
+        logsumexp (Tensor): only returned when `return_lse=True`. 4-D logsumexp tensor, with the
+            heads last layout (`[batch, X, Y, heads]`).
     """
     return neighborhood_attention_generic(
         query=query,
@@ -1008,7 +1037,8 @@ def na3d(
     run_persistent_kernel: bool = True,
     kernel_schedule: Optional[Union[str, KernelSchedule]] = None,
     torch_compile: bool = False,
-) -> Tensor:
+    return_lse: bool = False,
+) -> Union[Tensor, Tuple[Tensor, Tensor]]:
     """Computes 3-D neighborhood attention.
 
     GQA/MQA support (`heads != heads_kv`) is available. For now, `blackwell-fna` and
@@ -1148,9 +1178,15 @@ def na3d(
                 )
                 ```
 
+        return_lse (bool): Whether or not to return the `logsumexp` tensor. `logsumexp` can be used
+            in the backward pass, and for [attention merging][natten.merge_attentions].
+
     Returns:
         output (Tensor): 6-D output tensor, with the heads last layout
             (`[batch, X, Y, Z, heads, head_dim_v]`).
+
+        logsumexp (Tensor): only returned when `return_lse=True`. 5-D logsumexp tensor, with the
+            heads last layout (`[batch, X, Y, Z, heads]`).
     """
     return neighborhood_attention_generic(
         query=query,

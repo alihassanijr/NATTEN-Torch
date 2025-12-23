@@ -21,7 +21,7 @@
 #
 #################################################################################################
 
-from typing import List
+from typing import List, Tuple
 
 import torch
 from torch import Tensor
@@ -39,7 +39,9 @@ def maybe_torch_compile(*args, **kwargs):
 
 
 # TODO: if use cases for this grow, we might want to do a custom kernel
-def merge_attentions_fn(outputs: List[Tensor], lse_tensors: List[Tensor]) -> Tensor:
+def merge_attentions_fn(
+    outputs: List[Tensor], lse_tensors: List[Tensor]
+) -> Tuple[Tensor, Tensor]:
 
     assert len(outputs) >= 2, "Expected at least two tensors."
     assert len(outputs) == len(
@@ -97,12 +99,12 @@ def merge_attentions_fn(outputs: List[Tensor], lse_tensors: List[Tensor]) -> Ten
 
     output = output.to(output_type)
 
-    return output
+    return output, torch.log(sum_of_exps)
 
 
 # TODO: if use cases for this grow, we might want to do a custom kernel
 @maybe_torch_compile(fullgraph=True)
 def merge_attentions_compile(
     outputs: List[Tensor], lse_tensors: List[Tensor]
-) -> Tensor:
+) -> Tuple[Tensor, Tensor]:
     return merge_attentions_fn(outputs, lse_tensors)
