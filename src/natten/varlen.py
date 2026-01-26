@@ -50,7 +50,7 @@ def configure_varlen(
     dtype: torch.dtype,
     requires_grad: bool,
     #
-    kernel_size: DimensionTypeOrDed,
+    kernel_size: DimensionTypeOrDed = 2,
     stride: DimensionTypeOrDed = 1,
     dilation: DimensionTypeOrDed = 1,
     is_causal: Optional[CausalArgTypeOrDed] = False,
@@ -83,13 +83,18 @@ def configure_varlen(
 
         requires_grad (bool): Whether or not tensors will require backward pass.
 
-        kernel_size (tuple): kernel / window size must be provided for verification.
+        kernel_size (Optional[tuple]): kernel / window size must be provided for verification,
+            unless 'kernel_size_list' is provided.
 
-        stride (Optional[tuple]): stride parameter, if used, must be provided for verification.
+        stride (Optional[tuple]): stride parameter, if used, must be provided for verification,
+            unless 'stride_list' is provided.
 
-        dilation (Optional[tuple]): dilation parameter, if used, must be provided for verification.
+        dilation (Optional[tuple]): dilation parameter, if used, must be provided for verification,
+            unless 'dilation_list' is provided.
 
         is_causal (Optional[tuple]): is_causal parameter, if used, must be provided for verification.
+            This parameter does not support variable values like 'kernel_size', 'stride' and
+            'dilation'.
 
         kernel_size_list (Optional[list[tuple]]): list of kernel sizes corresponding to each token
             layout in 'token_layout_list'. This allows customizing kernel size for varying input
@@ -119,7 +124,7 @@ def configure_varlen(
             pass kernel.
 
     Returns:
-        varlen_metadata (dict): Runtime metadata for the current use case.
+        metadata (dict): Runtime metadata for the current use case.
     """
 
     if (
@@ -166,7 +171,7 @@ def configure_varlen(
     else:
         backward_q_tile_shape, backward_kv_tile_shape = None, None
 
-    varlen_metadata = generate_fna_varlen_metadata(
+    metadata = generate_fna_varlen_metadata(
         token_layout_list=token_layout_list,
         q_tile_shape=q_tile_shape,
         kv_tile_shape=kv_tile_shape,
@@ -184,24 +189,26 @@ def configure_varlen(
         dilation_list=dilation_list,
     )
 
-    return varlen_metadata
+    return metadata
 
 
 def neighborhood_attention_varlen(
     query: Tensor,
     key: Tensor,
     value: Tensor,
-    kernel_size: DimensionTypeOrDed,
-    stride: DimensionTypeOrDed = 1,
-    dilation: DimensionTypeOrDed = 1,
-    is_causal: Optional[CausalArgTypeOrDed] = False,
     # Varlen-specific args: at least one must be specified
-    # Option 1 (preferred): construct 'varlen_metadata' once ahead of time and reuse
-    varlen_metadata: Optional[dict] = None,
-    # Option 2 (incompatible with graphs, torch compile): eagerly construct 'varlen_metadata' from
+    # Option 1 (preferred): construct 'metadata' once ahead of time and reuse
+    metadata: Optional[dict] = None,
+    # Option 2 (incompatible with graphs, torch compile): eagerly construct 'metadata' from
     # 'token_layout_list', and the optional 'kernel_size_list', 'stride_list', 'dilation_list' on
     # every call.
     token_layout_list: VariableDimensionType = None,
+    #
+    kernel_size: DimensionTypeOrDed = 2,
+    stride: DimensionTypeOrDed = 1,
+    dilation: DimensionTypeOrDed = 1,
+    is_causal: Optional[CausalArgTypeOrDed] = False,
+    #
     kernel_size_list: VariableDimensionType = None,
     stride_list: VariableDimensionType = None,
     dilation_list: VariableDimensionType = None,
@@ -236,8 +243,8 @@ def neighborhood_attention_varlen(
         )
     backend = "blackwell-fna"
 
-    if varlen_metadata is None and token_layout_list is not None:
-        varlen_metadata = configure_varlen(
+    if metadata is None and token_layout_list is not None:
+        metadata = configure_varlen(
             token_layout_list=token_layout_list,
             head_dim=query.shape[-1],
             device=query.device,
@@ -259,7 +266,7 @@ def neighborhood_attention_varlen(
             backward_q_tile_shape=backward_q_tile_shape,
             backward_kv_tile_shape=backward_kv_tile_shape,
         )
-    assert varlen_metadata is not None
+    assert metadata is not None
 
     # kernel_size, stride, dilation, and is_causal are verified in
     # generate_fna_varlen_metadata
@@ -271,7 +278,7 @@ def neighborhood_attention_varlen(
             query=query,
             key=key,
             value=value,
-            varlen_metadata=varlen_metadata,
+            metadata=metadata,
             scale=scale,
             run_persistent_kernel=run_persistent_kernel,
             return_lse=return_lse,
