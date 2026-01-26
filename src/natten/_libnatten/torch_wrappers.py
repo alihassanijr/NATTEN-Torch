@@ -606,8 +606,12 @@ def make_blackwell_fna_ops(na_dim):
         cumulative_seqlen_Q: Optional[Tensor],
         cumulative_seqlen_KV: Optional[Tensor],
         token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
         max_seqlen_Q: int,
         max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
 
@@ -638,8 +642,12 @@ def make_blackwell_fna_ops(na_dim):
             cumulative_seqlen_Q,
             cumulative_seqlen_KV,
             token_layouts,
+            batch_map,
             max_seqlen_Q,
             max_seqlen_KV,
+            kernel_sizes,
+            strides,
+            dilations,
         )
 
         return output, logsumexp
@@ -663,8 +671,12 @@ def make_blackwell_fna_ops(na_dim):
         cumulative_seqlen_Q: Optional[Tensor],
         cumulative_seqlen_KV: Optional[Tensor],
         token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
         max_seqlen_Q: int,
         max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
 
@@ -703,8 +715,12 @@ def make_blackwell_fna_ops(na_dim):
         cumulative_seqlen_Q: Optional[Tensor],
         cumulative_seqlen_KV: Optional[Tensor],
         token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
         max_seqlen_Q: int,
         max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
         output, d_output, logsumexp = [
@@ -738,8 +754,12 @@ def make_blackwell_fna_ops(na_dim):
             cumulative_seqlen_Q,
             cumulative_seqlen_KV,
             token_layouts,
+            batch_map,
             max_seqlen_Q,
             max_seqlen_KV,
+            kernel_sizes,
+            strides,
+            dilations,
         )
 
         return d_query, d_key, d_value
@@ -765,8 +785,12 @@ def make_blackwell_fna_ops(na_dim):
         cumulative_seqlen_Q: Optional[Tensor],
         cumulative_seqlen_KV: Optional[Tensor],
         token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
         max_seqlen_Q: int,
         max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
         output, d_output, logsumexp = [
@@ -1488,19 +1512,20 @@ def make_token_permute_varlen_ops(na_dim):
     )
     def token_permute_varlen_torch_op(
         input_tensor: Tensor,
-        offsets_pre_permute: Tensor,
-        offsets_post_permute: Tensor,
-        token_layouts_pre_permute: Tensor,
+        offsets_original: Tensor,
+        offsets_tokperm: Tensor,
+        token_layouts: Tensor,
         max_seqlen: int,
         total_seqlen_post_permute: int,
         tile_shape: list[int],
         dilation: list[int],
+        dilations: Optional[Tensor],
         flip_tiled_dims: bool,
     ) -> Tensor:
         input_tensor = maybe_contiguous(input_tensor)
-        offsets_pre_permute = maybe_contiguous(offsets_pre_permute)
-        offsets_post_permute = maybe_contiguous(offsets_post_permute)
-        token_layouts_pre_permute = maybe_contiguous(token_layouts_pre_permute)
+        offsets_original = maybe_contiguous(offsets_original)
+        offsets_tokperm = maybe_contiguous(offsets_tokperm)
+        token_layouts = maybe_contiguous(token_layouts)
 
         assert input_tensor.shape[0] == 1
         output_shape = [
@@ -1515,9 +1540,10 @@ def make_token_permute_varlen_ops(na_dim):
         permute_handle(
             output,
             input_tensor,
-            offsets_pre_permute,
-            offsets_post_permute,
-            token_layouts_pre_permute,
+            offsets_original,
+            offsets_tokperm,
+            token_layouts,
+            dilations,
             max_seqlen,
             tile_shape,
             dilation,
@@ -1529,19 +1555,20 @@ def make_token_permute_varlen_ops(na_dim):
     @register_fake(f"natten::token_permute_varlen_{na_dim}d")
     def token_permute_varlen_torch_fake_op(
         input_tensor: Tensor,
-        offsets_pre_permute: Tensor,
-        offsets_post_permute: Tensor,
-        token_layouts_pre_permute: Tensor,
+        offsets_original: Tensor,
+        offsets_tokperm: Tensor,
+        token_layouts: Tensor,
         max_seqlen: int,
         total_seqlen_post_permute: int,
         tile_shape: list[int],
         dilation: list[int],
+        dilations: Optional[Tensor],
         flip_tiled_dims: bool,
     ) -> Tensor:
         input_tensor = maybe_contiguous(input_tensor)
-        offsets_pre_permute = maybe_contiguous(offsets_pre_permute)
-        offsets_post_permute = maybe_contiguous(offsets_post_permute)
-        token_layouts_pre_permute = maybe_contiguous(token_layouts_pre_permute)
+        offsets_original = maybe_contiguous(offsets_original)
+        offsets_tokperm = maybe_contiguous(offsets_tokperm)
+        token_layouts = maybe_contiguous(token_layouts)
 
         assert input_tensor.shape[0] == 1
         output_shape = [
@@ -1563,20 +1590,21 @@ def make_token_permute_varlen_ops(na_dim):
     )
     def token_unpermute_varlen_torch_op(
         input_tensor: Tensor,
-        offsets_pre_permute: Tensor,
-        offsets_post_permute: Tensor,
-        token_layouts_pre_permute: Tensor,
+        offsets_original: Tensor,
+        offsets_tokperm: Tensor,
+        token_layouts: Tensor,
         max_seqlen: int,
         total_seqlen_pre_permute: int,
         tile_shape: list[int],
         dilation: list[int],
+        dilations: Optional[Tensor],
         flip_tiled_dims: bool,
         output_seqlen: Optional[int],
     ) -> Tensor:
         input_tensor = maybe_contiguous(input_tensor)
-        offsets_pre_permute = maybe_contiguous(offsets_pre_permute)
-        offsets_post_permute = maybe_contiguous(offsets_post_permute)
-        token_layouts_pre_permute = maybe_contiguous(token_layouts_pre_permute)
+        offsets_original = maybe_contiguous(offsets_original)
+        offsets_tokperm = maybe_contiguous(offsets_tokperm)
+        token_layouts = maybe_contiguous(token_layouts)
 
         assert input_tensor.shape[0] == 1
         output_shape = [
@@ -1592,9 +1620,10 @@ def make_token_permute_varlen_ops(na_dim):
         unpermute_handle(
             output,
             input_tensor,
-            offsets_pre_permute,
-            offsets_post_permute,
-            token_layouts_pre_permute,
+            offsets_original,
+            offsets_tokperm,
+            token_layouts,
+            dilations,
             max_seqlen,
             tile_shape,
             dilation,
@@ -1606,20 +1635,21 @@ def make_token_permute_varlen_ops(na_dim):
     @register_fake(f"natten::token_unpermute_varlen_{na_dim}d")
     def token_unpermute_varlen_torch_fake_op(
         input_tensor: Tensor,
-        offsets_pre_permute: Tensor,
-        offsets_post_permute: Tensor,
-        token_layouts_pre_permute: Tensor,
+        offsets_original: Tensor,
+        offsets_tokperm: Tensor,
+        token_layouts: Tensor,
         max_seqlen: int,
         total_seqlen_pre_permute: int,
         tile_shape: list[int],
         dilation: list[int],
+        dilations: Optional[Tensor],
         flip_tiled_dims: bool,
         output_seqlen: Optional[int],
     ) -> Tensor:
         input_tensor = maybe_contiguous(input_tensor)
-        offsets_pre_permute = maybe_contiguous(offsets_pre_permute)
-        offsets_post_permute = maybe_contiguous(offsets_post_permute)
-        token_layouts_pre_permute = maybe_contiguous(token_layouts_pre_permute)
+        offsets_original = maybe_contiguous(offsets_original)
+        offsets_tokperm = maybe_contiguous(offsets_tokperm)
+        token_layouts = maybe_contiguous(token_layouts)
 
         assert input_tensor.shape[0] == 1
         output_shape = [
