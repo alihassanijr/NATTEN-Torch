@@ -857,7 +857,7 @@ def cutlass_blackwell_fna_varlen_generic(
     query: Tensor,
     key: Tensor,
     value: Tensor,
-    varlen_metadata: dict,  # provides all the necessary parameters, already verified
+    metadata: dict,  # provides all the necessary parameters, already verified
     #
     scale: Optional[float] = None,
     q_tile_shape: Optional[DimensionType] = None,
@@ -868,8 +868,8 @@ def cutlass_blackwell_fna_varlen_generic(
     return_lse: bool = False,
 ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
 
-    if varlen_metadata is None:
-        raise ValueError("'varlen_metadata' must be passed.")
+    if metadata is None:
+        raise ValueError("'metadata' must be passed.")
 
     requires_grad = query.requires_grad or key.requires_grad or value.requires_grad
 
@@ -877,20 +877,20 @@ def cutlass_blackwell_fna_varlen_generic(
         query=query,
         key=key,
         value=value,
-        metadata=varlen_metadata,
+        metadata=metadata,
         requires_grad=requires_grad,
     )
 
-    na_dim = varlen_metadata["na_dim"]
+    na_dim = metadata["na_dim"]
 
     # We need to verify the tile shapes used to generate the metadata are compatible
     q_tile_shape, kv_tile_shape = (
-        varlen_metadata["q_tile_shape"],
-        varlen_metadata["kv_tile_shape"],
+        metadata["q_tile_shape"],
+        metadata["kv_tile_shape"],
     )
     backward_q_tile_shape, backward_kv_tile_shape = (
-        varlen_metadata["q_tile_shape_bwd"],
-        varlen_metadata["kv_tile_shape_bwd"],
+        metadata["q_tile_shape_bwd"],
+        metadata["kv_tile_shape_bwd"],
     )
 
     q_tile_shape, kv_tile_shape = check_cutlass_blackwell_fna_forward_config_tensorless(
@@ -939,7 +939,7 @@ def cutlass_blackwell_fna_varlen_generic(
         value,
         scale,
         run_persistent_kernel,
-        varlen_metadata,
+        metadata,
     )
 
     if return_lse:

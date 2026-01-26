@@ -265,7 +265,7 @@ def generate_fna_varlen_metadata(
     backward_kv_tile_shape: Optional[DimensionType],
     device: torch.device,
     flip_tiled_dims: bool,
-    kernel_size: DimensionTypeOrDed,
+    kernel_size: DimensionTypeOrDed = 2,
     stride: DimensionTypeOrDed = 1,
     dilation: DimensionTypeOrDed = 1,
     is_causal: Optional[CausalArgTypeOrDed] = False,
@@ -312,13 +312,18 @@ def generate_fna_varlen_metadata(
 
         flip_tiled_dims (bool): flip_tiled_dims argument from TokPerm.
 
-        kernel_size (tuple): kernel / window size must be provided for verification.
+        kernel_size (Optional[tuple]): kernel / window size must be provided for verification,
+            unless 'kernel_size_list' is provided.
 
-        stride (Optional[tuple]): stride parameter, if used, must be provided for verification.
+        stride (Optional[tuple]): stride parameter, if used, must be provided for verification,
+            unless 'stride_list' is provided.
 
-        dilation (Optional[tuple]): dilation parameter, if used, must be provided for verification.
+        dilation (Optional[tuple]): dilation parameter, if used, must be provided for verification,
+            unless 'dilation_list' is provided.
 
         is_causal (Optional[tuple]): is_causal parameter, if used, must be provided for verification.
+            This parameter does not support variable values like 'kernel_size', 'stride' and
+            'dilation'.
 
         kernel_size_list (Optional[list[tuple]]): (VarParam) List of kernel size parameters, in
             case different sets of tokens have varying kernel sizes.
