@@ -20,6 +20,7 @@
 # SOFTWARE.
 #
 #################################################################################################
+
 import functools
 from typing import Optional, Tuple, Union
 
@@ -41,9 +42,17 @@ from natten._libnatten import (
 from natten.backends.configs.checks import can_run_cutlass_blackwell_fna
 from natten.backends.configs.cutlass_blackwell import (
     check_cutlass_blackwell_fna_backward_config,
+    check_cutlass_blackwell_fna_backward_config_tensorless,
     check_cutlass_blackwell_fna_forward_config,
+    check_cutlass_blackwell_fna_forward_config_tensorless,
 )
-from natten.token_permute import token_permute_operation, token_unpermute_operation
+from natten.token_permute import (
+    token_permute_operation,
+    token_permute_varlen_operation,
+    token_unpermute_operation,
+    token_unpermute_varlen_operation,
+    verify_fna_varlen_metadata,
+)
 from natten.types import (
     CausalArg1DTypeOrDed,
     CausalArg2DTypeOrDed,
@@ -65,24 +74,25 @@ from natten.types import (
 from natten.utils.checks import (
     check_all_args,
     check_args_against_input,
+    fmha_tensor_checks,
     na_tensor_checks,
 )
+
+FORWARD_OPS = {
+    1: blackwell_na1d_forward,
+    2: blackwell_na2d_forward,
+    3: blackwell_na3d_forward,
+}
+
+BACKWARD_OPS = {
+    1: blackwell_na1d_backward,
+    2: blackwell_na2d_backward,
+    3: blackwell_na3d_backward,
+}
 
 
 def make_cutlass_blackwell_fna_autograd_fn(na_dim):
     assert na_dim in [1, 2, 3]
-
-    FORWARD_OPS = {
-        1: blackwell_na1d_forward,
-        2: blackwell_na2d_forward,
-        3: blackwell_na3d_forward,
-    }
-
-    BACKWARD_OPS = {
-        1: blackwell_na1d_backward,
-        2: blackwell_na2d_backward,
-        3: blackwell_na3d_backward,
-    }
 
     class CutlassBlackwellFnaGenericAutogradFn(Function):
         @staticmethod
@@ -144,6 +154,17 @@ def make_cutlass_blackwell_fna_autograd_fn(na_dim):
                 q_tile_shape,
                 kv_tile_shape,
                 run_persistent_kernel,
+                # varlen args
+                None,
+                None,
+                None,
+                None,
+                0,
+                0,
+                # var-param
+                None,
+                None,
+                None,
             )
 
             # Token un-permute begin
@@ -255,6 +276,17 @@ def make_cutlass_blackwell_fna_autograd_fn(na_dim):
                 qkv_shape,
                 q_tile_shape,
                 kv_tile_shape,
+                # varlen args
+                None,
+                None,
+                None,
+                None,
+                0,
+                0,
+                # var-param
+                None,
+                None,
+                None,
             )
 
             # Token un-permute begin
@@ -302,15 +334,348 @@ def make_cutlass_blackwell_fna_autograd_fn(na_dim):
     return CutlassBlackwellFnaGenericAutogradFn
 
 
+def make_cutlass_blackwell_fna_varlen_autograd_fn(na_dim):
+    assert na_dim in [1, 2, 3]
+
+    class CutlassBlackwellFnaVarlenAutogradFn(Function):
+        """
+        Varlen ops NEVER token permute -- it has to be done outside the op
+        """
+
+        @staticmethod
+        @amp_fwd
+        def forward(
+            ctx,
+            query: Tensor,
+            key: Tensor,
+            value: Tensor,
+            scale: float,
+            run_persistent_kernel: bool,
+            varlen_metadata: dict,
+        ) -> Tuple[Tensor, Tensor]:
+            kernel_size = varlen_metadata["kernel_size"]
+            stride = varlen_metadata["stride"]
+            dilation = varlen_metadata["dilation"]
+            is_causal = varlen_metadata["is_causal"]
+            # var-param (optional)
+            kernel_sizes = varlen_metadata["kernel_sizes"]
+            strides = varlen_metadata["strides"]
+            dilations = varlen_metadata["dilations"]
+
+            q_tile_shape, kv_tile_shape = (
+                varlen_metadata["q_tile_shape"],
+                varlen_metadata["kv_tile_shape"],
+            )
+            metadata_q, metadata_kv = (
+                varlen_metadata["metadata_q"],
+                varlen_metadata["metadata_kv"],
+            )
+
+            # Token permute begin
+            qkv_shape = tuple(0 for _ in range(na_dim))
+            q_shape = tuple(0 for _ in range(na_dim))
+            kv_shape = tuple(0 for _ in range(na_dim))
+
+            query_perm = token_permute_varlen_operation(
+                query,
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+            key_perm = token_permute_varlen_operation(
+                key,
+                metadata=metadata_kv,
+                tile_shape=kv_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+            value_perm = token_permute_varlen_operation(
+                value,
+                metadata=metadata_kv,
+                tile_shape=kv_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+
+            cumulative_seqlen_Q = metadata_q["offsets_kernel"]
+            cumulative_seqlen_KV = metadata_kv["offsets_kernel"]
+            max_seqlen_Q = metadata_q["max_seqlen_kernel"]
+            max_seqlen_KV = metadata_kv["max_seqlen_kernel"]
+            # TODO: these two should be identical for q and kv, make them once?
+            token_layouts = metadata_q["token_layouts"]
+            batch_map = metadata_q["batch_map"]
+            # Token permute end
+
+            query_perm = query_perm.contiguous()
+            key_perm = key_perm.contiguous()
+            value_perm = value_perm.contiguous()
+
+            output_perm, logsumexp_perm = FORWARD_OPS[na_dim](
+                query_perm,
+                key_perm,
+                value_perm,
+                kernel_size,
+                stride,
+                dilation,
+                is_causal,
+                scale,
+                q_shape,
+                kv_shape,
+                qkv_shape,
+                q_tile_shape,
+                kv_tile_shape,
+                run_persistent_kernel,
+                # varlen args
+                cumulative_seqlen_Q,
+                cumulative_seqlen_KV,
+                token_layouts,
+                batch_map,
+                max_seqlen_Q,
+                max_seqlen_KV,
+                # var-param
+                kernel_sizes,
+                strides,
+                dilations,
+            )
+
+            # Token un-permute begin
+            output = token_unpermute_varlen_operation(
+                output_perm,
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+                # in case there's any extra padding
+                output_seqlen=query.shape[1],
+            )
+            logsumexp = token_unpermute_varlen_operation(
+                logsumexp_perm.unsqueeze(-1),
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+                # in case there's any extra padding
+                output_seqlen=query.shape[1],
+            ).squeeze(-1)
+            # Token un-permute end
+
+            ctx.save_for_backward(
+                query, key, value, logsumexp, output, kernel_sizes, strides, dilations
+            )
+            ctx.kernel_size = kernel_size
+            ctx.stride = stride
+            ctx.dilation = dilation
+            ctx.is_causal = is_causal
+            ctx.scale = scale
+            ctx.varlen_metadata = varlen_metadata
+
+            return output, logsumexp
+
+        @staticmethod
+        @amp_bwd
+        def backward(ctx, d_output: Tensor, d_lse: Tensor) -> Tuple[
+            Tensor,
+            Tensor,
+            Tensor,
+            NoneType,
+            NoneType,
+            NoneType,
+        ]:
+            query, key, value, logsumexp, output, kernel_sizes, strides, dilations = (
+                ctx.saved_tensors
+            )
+            kernel_size, stride, dilation, is_causal, scale = (
+                ctx.kernel_size,
+                ctx.stride,
+                ctx.dilation,
+                ctx.is_causal,
+                ctx.scale,
+            )
+
+            q_tile_shape, kv_tile_shape = (
+                ctx.varlen_metadata["q_tile_shape_bwd"],
+                ctx.varlen_metadata["kv_tile_shape_bwd"],
+            )
+            metadata_q, metadata_kv = (
+                ctx.varlen_metadata["metadata_q_bwd"],
+                ctx.varlen_metadata["metadata_kv_bwd"],
+            )
+
+            # Token permute begin
+            qkv_shape = tuple(0 for _ in range(na_dim))
+            q_shape = tuple(0 for _ in range(na_dim))
+            kv_shape = tuple(0 for _ in range(na_dim))
+
+            query_perm = token_permute_varlen_operation(
+                query,
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+            output_perm = token_permute_varlen_operation(
+                output,
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+            d_output_perm = token_permute_varlen_operation(
+                d_output,
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+            logsumexp_perm = token_permute_varlen_operation(
+                logsumexp.unsqueeze(-1),
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+            key_perm = token_permute_varlen_operation(
+                key,
+                metadata=metadata_kv,
+                tile_shape=kv_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+            value_perm = token_permute_varlen_operation(
+                value,
+                metadata=metadata_kv,
+                tile_shape=kv_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+            )
+
+            cumulative_seqlen_Q = metadata_q["offsets_kernel"]
+            cumulative_seqlen_KV = metadata_kv["offsets_kernel"]
+            # this should be identical for q and kv
+            max_seqlen_Q = metadata_q["max_seqlen_kernel"]
+            max_seqlen_KV = metadata_kv["max_seqlen_kernel"]
+            # TODO: these two should be identical for q and kv, make them once?
+            token_layouts = metadata_q["token_layouts"]
+            batch_map = metadata_q["batch_map"]
+            # Token permute end
+
+            query_perm = query_perm.contiguous()
+            key_perm = key_perm.contiguous()
+            value_perm = value_perm.contiguous()
+            output_perm = output_perm.contiguous()
+            d_output_perm = d_output_perm.contiguous()
+            logsumexp_perm = logsumexp_perm.squeeze(-1)
+
+            d_query_perm, d_key_perm, d_value_perm = BACKWARD_OPS[na_dim](
+                query_perm,
+                key_perm,
+                value_perm,
+                output_perm,
+                d_output_perm,
+                logsumexp_perm,
+                kernel_size,
+                stride,
+                dilation,
+                is_causal,
+                scale,
+                q_shape,
+                kv_shape,
+                qkv_shape,
+                q_tile_shape,
+                kv_tile_shape,
+                # varlen args
+                cumulative_seqlen_Q,
+                cumulative_seqlen_KV,
+                token_layouts,
+                batch_map,
+                max_seqlen_Q,
+                max_seqlen_KV,
+                # var-param
+                kernel_sizes,
+                strides,
+                dilations,
+            )
+
+            # Token un-permute begin
+            d_query = token_unpermute_varlen_operation(
+                d_query_perm,
+                metadata=metadata_q,
+                tile_shape=q_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+                # in case there's any extra padding
+                output_seqlen=query.shape[1],
+            )
+            d_key = token_unpermute_varlen_operation(
+                d_key_perm,
+                metadata=metadata_kv,
+                tile_shape=kv_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+                # in case there's any extra padding
+                output_seqlen=key.shape[1],
+            )
+            d_value = token_unpermute_varlen_operation(
+                d_value_perm,
+                metadata=metadata_kv,
+                tile_shape=kv_tile_shape,
+                dilation=dilation,
+                dilations=dilations,
+                flip_tiled_dims=True,
+                # in case there's any extra padding
+                output_seqlen=value.shape[1],
+            )
+            # Token un-permute end
+
+            assert d_query.shape == query.shape
+            assert d_key.shape == key.shape
+            assert d_value.shape == value.shape
+
+            return (
+                d_query,
+                d_key,
+                d_value,
+                None,
+                None,
+                None,
+            )
+
+    return CutlassBlackwellFnaVarlenAutogradFn
+
+
 CutlassBlackwellFna1DAutogradFn = make_cutlass_blackwell_fna_autograd_fn(1)
 CutlassBlackwellFna2DAutogradFn = make_cutlass_blackwell_fna_autograd_fn(2)
 CutlassBlackwellFna3DAutogradFn = make_cutlass_blackwell_fna_autograd_fn(3)
+
+CutlassBlackwellFna1DVarlenAutogradFn = make_cutlass_blackwell_fna_varlen_autograd_fn(1)
+CutlassBlackwellFna2DVarlenAutogradFn = make_cutlass_blackwell_fna_varlen_autograd_fn(2)
+CutlassBlackwellFna3DVarlenAutogradFn = make_cutlass_blackwell_fna_varlen_autograd_fn(3)
 
 
 CutlassBlackwellFNAAutogradFns = {
     1: CutlassBlackwellFna1DAutogradFn,
     2: CutlassBlackwellFna2DAutogradFn,
     3: CutlassBlackwellFna3DAutogradFn,
+}
+
+CutlassBlackwellFNAVarlenAutogradFns = {
+    1: CutlassBlackwellFna1DVarlenAutogradFn,
+    2: CutlassBlackwellFna2DVarlenAutogradFn,
+    3: CutlassBlackwellFna3DVarlenAutogradFn,
 }
 
 
@@ -355,11 +720,14 @@ def cutlass_blackwell_fna_generic(
         input_tensor=query, q_tile_shape=q_tile_shape, kv_tile_shape=kv_tile_shape
     )
 
-    backward_config = check_cutlass_blackwell_fna_backward_config(
-        input_tensor=query,
-        q_tile_shape=backward_q_tile_shape,
-        kv_tile_shape=backward_kv_tile_shape,
-    )
+    requires_grad = query.requires_grad or key.requires_grad or value.requires_grad
+    backward_config = None
+    if requires_grad:
+        backward_config = check_cutlass_blackwell_fna_backward_config(
+            input_tensor=query,
+            q_tile_shape=backward_q_tile_shape,
+            kv_tile_shape=backward_kv_tile_shape,
+        )
 
     scale = scale or query.shape[-1] ** -0.5
 
@@ -483,3 +851,98 @@ def na3d_cutlass_blackwell_fna(
         run_persistent_kernel=run_persistent_kernel,
         return_lse=return_lse,
     )
+
+
+def cutlass_blackwell_fna_varlen_generic(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    metadata: dict,  # provides all the necessary parameters, already verified
+    #
+    scale: Optional[float] = None,
+    q_tile_shape: Optional[DimensionType] = None,
+    kv_tile_shape: Optional[DimensionType] = None,
+    backward_q_tile_shape: Optional[DimensionType] = None,
+    backward_kv_tile_shape: Optional[DimensionType] = None,
+    run_persistent_kernel: bool = False,
+    return_lse: bool = False,
+) -> Union[Tensor, Tuple[Tensor, Tensor]]:
+
+    if metadata is None:
+        raise ValueError("'metadata' must be passed.")
+
+    requires_grad = query.requires_grad or key.requires_grad or value.requires_grad
+
+    verify_fna_varlen_metadata(
+        query=query,
+        key=key,
+        value=value,
+        metadata=metadata,
+        requires_grad=requires_grad,
+    )
+
+    na_dim = metadata["na_dim"]
+
+    # We need to verify the tile shapes used to generate the metadata are compatible
+    q_tile_shape, kv_tile_shape = (
+        metadata["q_tile_shape"],
+        metadata["kv_tile_shape"],
+    )
+    backward_q_tile_shape, backward_kv_tile_shape = (
+        metadata["q_tile_shape_bwd"],
+        metadata["kv_tile_shape_bwd"],
+    )
+
+    q_tile_shape, kv_tile_shape = check_cutlass_blackwell_fna_forward_config_tensorless(
+        na_dim=na_dim,
+        head_dim=query.shape[-1],
+        dtype=query.dtype,
+        device=query.device,
+        q_tile_shape=q_tile_shape,
+        kv_tile_shape=kv_tile_shape,
+    )
+
+    if requires_grad:
+        backward_q_tile_shape, backward_kv_tile_shape = (
+            check_cutlass_blackwell_fna_backward_config_tensorless(
+                na_dim=na_dim,
+                head_dim=query.shape[-1],
+                dtype=query.dtype,
+                device=query.device,
+                q_tile_shape=backward_q_tile_shape,
+                kv_tile_shape=backward_kv_tile_shape,
+            )
+        )
+    else:
+        backward_q_tile_shape, backward_kv_tile_shape = None, None
+
+    # We use FMHA verifiers here because tensors are sequence-packed
+    fmha_tensor_checks(
+        query,
+        key,
+        value,
+        must_match_head_dims=True,
+        supports_gqa_mqa=True,
+        backend_name="Blackwell FNA (varlen)",
+    )
+
+    assert can_run_cutlass_blackwell_fna(query, key, value, raise_error=True)
+
+    # kernel_size, stride, dilation, and is_causal are verified in
+    # generate_fna_varlen_metadata, so are potential variable parameters
+
+    scale = scale or query.shape[-1] ** -0.5
+
+    output, lse = CutlassBlackwellFNAVarlenAutogradFns[na_dim].apply(
+        query,
+        key,
+        value,
+        scale,
+        run_persistent_kernel,
+        metadata,
+    )
+
+    if return_lse:
+        return output, lse
+
+    return output

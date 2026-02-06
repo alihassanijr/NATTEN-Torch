@@ -48,6 +48,7 @@
 namespace cutlass::fna::kernel {
 
 using namespace cutlass::fna::collective;
+using namespace cutlass::fmha::collective;
 
 using namespace cute;
 
@@ -61,7 +62,7 @@ template <
     class KVTileShape,
     class NADim>
 struct Sm100FnaBwdKernelTmaWarpSpecialized {
-  using MultiDimTileShape = cute::tuple<QTileShape, KVTileShape>;
+  using BatchMap = cute::tuple<int32_t, int32_t>;
 
   static_assert(
       size(QTileShape{}) == get<0>(TileShape{}),
@@ -102,6 +103,10 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
     Compute = 0x3,
     Reduce = 0x4
   };
+
+  static constexpr bool IsVarlen =
+      is_variable_length_v<tuple_element_t<0, ProblemShape>> ||
+      is_variable_length_v<tuple_element_t<1, ProblemShape>>;
 
   static constexpr unsigned long long kWarpAssignment = 0x12'3333'3333'4444ull;
   static constexpr int kNumComputeWarps = 8;
@@ -427,21 +432,49 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
     NADim window_size;
     NADim stride;
     NADim dilation;
+
+    NADim* token_layout_ptr;
+    BatchMap* batch_map_ptr;
+
+    NADim* window_sizes_ptr;
+    NADim* strides_ptr;
+    NADim* dilations_ptr;
   };
 
-  struct FnaParams {
+  struct FnaParamsStandard {
+    using NADimType = NADim;
+
     NADim qkv_shape;
     NADim q_shape;
     NADim kv_shape;
     cute::tuple<NADim, NADim, NADim, NADim, NADim>
         na_params; // win, win_left, win_right, stride, stride_offset
     bool is_fully_block_sparse;
-    bool has_q_padding;
+    bool has_padding;
     NADim dilation;
     bool requires_qkv_fixup;
     bool is_dilated;
     int num_dilation_groups;
   };
+
+  struct FnaParamsVarlen {
+    using NADimType = NADim;
+
+    cute::tuple<NADim, NADim, NADim, NADim, NADim>
+        na_params; // win, win_left, win_right, stride, stride_offset
+    NADim dilation;
+    int num_dilation_groups;
+
+    NADim* token_layout_ptr;
+    BatchMap* batch_map_ptr;
+
+    NADim* window_sizes_ptr;
+    NADim* strides_ptr;
+    NADim* dilations_ptr;
+  };
+
+  using FnaParams =
+      cute::conditional_t<IsVarlen, FnaParamsVarlen, FnaParamsStandard>;
 
   struct Arguments {
     ProblemShape problem_shape;
@@ -471,12 +504,30 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
     if (D % Alignment != 0 || D_VO % Alignment != 0) {
       return false;
     }
-    return evenly_divides(args.fna.q_shape, QTileShape{}) &&
-        evenly_divides(args.fna.kv_shape, KVTileShape{}) &&
-        evenly_divides(B, size(args.fna.dilation)) && // dilation groups are
-                                                      // folded into batch
-        tuple_leq(args.fna.window_size, args.fna.qkv_shape) &&
-        tuple_leq(args.fna.stride, args.fna.window_size);
+
+    if constexpr (IsVarlen) {
+      // variable-dilations needs the extra batch map tensor
+      if (args.fna.dilations_ptr != nullptr &&
+          args.fna.batch_map_ptr == nullptr) {
+        return false;
+      }
+
+      // NA parameter verification is done during metadata construction
+      // (host-side, ahead of time)
+      if (args.fna.strides_ptr == nullptr &&
+          args.fna.window_sizes_ptr == nullptr) {
+        return tuple_leq(args.fna.stride, args.fna.window_size);
+      }
+
+      return args.fna.token_layout_ptr != nullptr;
+    } else {
+      return evenly_divides(args.fna.q_shape, QTileShape{}) &&
+          evenly_divides(args.fna.kv_shape, KVTileShape{}) &&
+          evenly_divides(B, size(args.fna.dilation)) && // dilation groups are
+                                                        // folded into batch
+          tuple_leq(args.fna.window_size, args.fna.qkv_shape) &&
+          tuple_leq(args.fna.stride, args.fna.window_size);
+    }
   }
 
   static Status initialize_workspace(Arguments const&, void*, cudaStream_t) {
@@ -487,6 +538,13 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
     auto [Q_, K_, D, D_VO, HB] = args.problem_shape;
     int Q = Q_;
     int K = K_;
+
+    if constexpr (is_variable_length_v<decltype(Q_)>) {
+      Q = Q_.total_length;
+    }
+    if constexpr (is_variable_length_v<decltype(K_)>) {
+      K = K_.total_length;
+    }
 
     auto params_kq = CollectiveMmaKQ::to_underlying_arguments(
         make_shape(K, Q, D, HB),
@@ -526,30 +584,48 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
         window_right,
         args.fna.stride,
         stride_offset);
-    bool requires_qkv_fixup =
-        not evenly_divides(args.fna.qkv_shape, args.fna.dilation);
 
-    auto is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
-        args.fna.qkv_shape,
-        args.fna.window_size,
-        args.fna.stride,
-        QTileShape{},
-        KVTileShape{});
+    FnaParams fna_params;
+    if constexpr (IsVarlen) {
+      fna_params = FnaParams{
+          na_params,
+          /* dilation */ args.fna.dilation,
+          /* num_dilation_groups */ size(args.fna.dilation),
+          args.fna.token_layout_ptr,
+          args.fna.batch_map_ptr,
+          // var-param
+          args.fna.window_sizes_ptr,
+          args.fna.strides_ptr,
+          args.fna.dilations_ptr,
+      };
+    } else {
+      bool requires_qkv_fixup =
+          not evenly_divides(args.fna.qkv_shape, args.fna.dilation);
+
+      auto is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
+          args.fna.qkv_shape,
+          args.fna.window_size,
+          args.fna.stride,
+          QTileShape{},
+          KVTileShape{});
+
+      fna_params = FnaParams{
+          args.fna.qkv_shape,
+          args.fna.q_shape,
+          args.fna.kv_shape,
+          na_params,
+          is_fully_block_sparse,
+          /* has_padding */
+          not evenly_divides(args.fna.qkv_shape, QTileShape{}),
+          args.fna.dilation,
+          requires_qkv_fixup,
+          is_dilated(args.fna.dilation),
+          size(args.fna.dilation)};
+    }
 
     return Params{
         args.problem_shape,
-        FnaParams{
-            args.fna.qkv_shape,
-            args.fna.q_shape,
-            args.fna.kv_shape,
-            na_params,
-            is_fully_block_sparse,
-            /* has_q_padding */
-            not evenly_divides(args.fna.qkv_shape, QTileShape{}),
-            args.fna.dilation,
-            requires_qkv_fixup,
-            is_dilated(args.fna.dilation),
-            size(args.fna.dilation)},
+        fna_params,
         args.mainloop,
         MainloopParams{
             params_kq.tma_load_a,
@@ -1430,7 +1506,7 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
       QKVShape const& q_offset,
       QKVShape const& q_tiles,
       bool is_fully_block_sparse,
-      bool has_q_padding,
+      bool has_padding,
       MainloopArguments const& mainloop_args,
       EpilogueArguments const& epilogue_args,
       TensorStorage& shared_tensors,
@@ -1594,13 +1670,12 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
                   get<1>(c_transpose) + iter_index * TileShapeQ{},
                   get<0>(c_transpose) + get<1>(blk_coord) * TileShapeK{});
             },
-            MultiDimTileShape{},
             kv_shape,
             qkv_shape,
             na_params,
             q_offset,
             q_tiles);
-      } else if (has_q_padding) {
+      } else if (has_padding) {
         Mask{}.apply_padded_mask(
             tTR_rST,
             /* index_q = */
@@ -1609,7 +1684,6 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
               // NOTE: we only care about q_idx here!
               return get<1>(c_transpose) + iter_index * TileShapeQ{};
             },
-            MultiDimTileShape{},
             qkv_shape,
             na_params,
             q_offset,
@@ -2166,47 +2240,26 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
         _0{},
         _0{},
         make_coord(make_coord(0, blockIdx.y), blockIdx.z));
+    auto [problem_shape, blk_offset] =
+        apply_variable_length_offset(params.problem_shape, blk_coord);
 
-    // FNA's varlen mode works differently
-    auto blk_offset = make_coord(
-        _0{}, _0{}, _0{}, _0{}, make_coord(make_coord(_0{}, _0{}), _0{}));
-    auto problem_shape = params.problem_shape;
-
-    // FNA
-    auto qkv_shape = params.fna.qkv_shape;
-    bool is_fully_block_sparse = params.fna.is_fully_block_sparse;
-    bool has_q_padding = params.fna.has_q_padding;
-    if (params.fna.requires_qkv_fixup) {
-      qkv_shape = Mask{}.correct_qkv_shape(
-          problem_shape,
-          params.fna.qkv_shape,
-          blk_coord,
-          params.fna.dilation,
-          params.fna.num_dilation_groups);
-      is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
-          qkv_shape,
-          get<0>(params.fna.na_params),
-          get<3>(params.fna.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_q_padding = not evenly_divides(qkv_shape, QTileShape{});
-    } else if (params.fna.is_dilated) {
-      qkv_shape = ceil_div(params.fna.qkv_shape, params.fna.dilation);
-      is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
-          qkv_shape,
-          get<0>(params.fna.na_params),
-          get<3>(params.fna.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_q_padding = not evenly_divides(qkv_shape, QTileShape{});
+    if (get<1>(blk_coord) * TileShapeK{} >= get<1>(problem_shape)) {
+      return;
     }
 
-    auto [q_start, num_q_tiles] = Mask{}.get_trip_count(
-        blk_coord,
-        MultiDimTileShape{},
-        params.fna.kv_shape,
-        qkv_shape,
-        params.fna.na_params);
+    // FNA
+    auto
+        [qkv_shape,
+         q_shape,
+         kv_shape,
+         na_params,
+         is_fully_block_sparse,
+         has_padding] =
+            update_params<IsVarlen, /* IsBackward = */ true, Mask>(
+                params.fna, blk_coord, problem_shape);
+
+    auto [q_start, num_q_tiles] =
+        Mask{}.get_trip_count(blk_coord, kv_shape, qkv_shape, na_params);
 
     int iter_start = 0;
     int iter_end = size(num_q_tiles);
@@ -2214,7 +2267,7 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
 
     auto q_start_tile = ceil_div(q_start, QTileShape{});
 
-    auto q_tiled = ceil_div(params.fna.q_shape, QTileShape{});
+    auto q_tiled = ceil_div(q_shape, QTileShape{});
     auto ctr = make_identity_tensor(num_q_tiles);
     auto ctr_offset = domain_offset(q_start_tile, ctr);
 
@@ -2306,13 +2359,13 @@ struct Sm100FnaBwdKernelTmaWarpSpecialized {
           iter_end,
           iter_count,
           // FNA params
-          params.fna.kv_shape,
+          kv_shape,
           qkv_shape,
-          params.fna.na_params,
+          na_params,
           q_start,
           num_q_tiles,
           is_fully_block_sparse,
-          has_q_padding,
+          has_padding,
           //
           params.mainloop,
           params.epilogue,
