@@ -34,6 +34,7 @@ from torch import Tensor
 from natten.backends.blackwell_fmha import cutlass_blackwell_fmha
 from natten.backends.blackwell_fna import (
     cutlass_blackwell_fna_generic,
+    cutlass_blackwell_fna_varlen_generic,
     na1d_cutlass_blackwell_fna,
     na2d_cutlass_blackwell_fna,
     na3d_cutlass_blackwell_fna,
@@ -224,6 +225,7 @@ __all__ = [
     "na3d_cutlass_fna",
     "cutlass_blackwell_fmha",
     "cutlass_blackwell_fna_generic",
+    "cutlass_blackwell_fna_varlen_generic",
     "cutlass_hopper_fmha",
     "cutlass_hopper_fna_generic",
     "na1d_cutlass_blackwell_fna",
