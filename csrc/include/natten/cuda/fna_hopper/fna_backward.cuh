@@ -28,6 +28,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/kernel_hardware_info.h"
 
+#include "natten/cuda/fmha_hopper/collective/fmha_varlen.hpp"
 #include "natten/cuda/fna_hopper/collective/fna_fusion.hpp"
 #include "natten/cuda/fna_hopper/collective/fna_fusion_bwd.hpp"
 #include "natten/cuda/fna_hopper/device/fna_bwd_sm90.hpp"
@@ -46,7 +47,8 @@ template <
     class Causal,
     class QTileShape,
     class KVTileShape,
-    class TileShape>
+    class TileShape,
+    bool kIsVarlen>
 struct KernelBackward {
   static_assert(
       rank(QTileShape{}) == 1 || rank(QTileShape{}) == 2 ||
@@ -62,21 +64,30 @@ struct KernelBackward {
           cute::tuple<int>>>;
 
   using ElementAccumulator = float;
+  using VariableLength = cutlass::fmha::collective::VariableLength;
 
   // B H Q K D
-  using ProblemShapeType = cute::tuple<int, int, int, int, int>;
+  using ProblemShapeRegular = cute::tuple<int, int, int, int, int>;
+  using ProblemShapeVarlen =
+      cute::tuple<int, int, VariableLength, VariableLength, int>;
+  using ProblemShapeType =
+      std::conditional_t<kIsVarlen, ProblemShapeVarlen, ProblemShapeRegular>;
 
   using Operation = cutlass::fna::device::FnaBwdSm90<
       ProblemShapeType,
       Element,
       ElementAccumulator,
       TileShape,
-      collective::NeighborhoodAttentionBackwardMaskSm90<Causal>,
+      collective::NeighborhoodAttentionBackwardMaskSm90<
+          QTileShape,
+          KVTileShape,
+          Causal>,
       QTileShape,
       KVTileShape,
       NADim>;
 
   using Arguments = typename Operation::Arguments;
+  using BatchMap = typename Operation::BatchMap;
 
   Operation op;
 
@@ -95,42 +106,84 @@ struct KernelBackward {
       int seqlen_KV,
       int heads,
       int dim,
+      float attn_scale,
+      // fna parameters
       NADim q_shape,
       NADim kv_shape,
       NADim qkv_shape,
       NADim window_size,
       NADim stride,
       NADim dilation,
-      int device_id,
-      float attn_scale) {
-    auto dim_aligned = cutlass::round_up(dim, 8); // alignment
-    ProblemShapeType problem_shape = ProblemShapeType{
+      // varlen parameters
+      int max_seqlen_Q,
+      int max_seqlen_KV,
+      void* ptr_cumulative_seqlen_Q,
+      void* ptr_cumulative_seqlen_KV,
+      void* ptr_token_layouts,
+      void* ptr_batch_map,
+      // var-param parameters
+      void* ptr_window_sizes,
+      void* ptr_strides,
+      void* ptr_dilations,
+      // init/launch params
+      int device_id) {
+    auto problem_shape_regular = cute::make_tuple(
         batch,
         heads,
         seqlen_Q,
         seqlen_KV,
-        dim_aligned,
-    };
+        // head dim is always either 32, 64, or 128 in natten, but it should
+        // always meet the 128-bit alignment constraint
+        dim);
+
+    ProblemShapeType problem_shape_launch;
+    decltype(problem_shape_regular) problem_shape_memory;
+
+    if constexpr (kIsVarlen) {
+      problem_shape_memory = problem_shape_regular;
+      get<0>(problem_shape_memory) = 1;
+
+      get<0>(problem_shape_launch) = get<0>(problem_shape_regular);
+      get<1>(problem_shape_launch) = get<1>(problem_shape_regular);
+
+      get<2>(problem_shape_launch) = VariableLength{
+          max_seqlen_Q,
+          reinterpret_cast<int*>(ptr_cumulative_seqlen_Q),
+          seqlen_Q};
+      get<3>(problem_shape_launch) = VariableLength{
+          max_seqlen_KV,
+          reinterpret_cast<int*>(ptr_cumulative_seqlen_KV),
+          seqlen_KV};
+      get<4>(problem_shape_launch) = get<4>(problem_shape_regular);
+    } else {
+      problem_shape_memory = problem_shape_regular;
+      problem_shape_launch = problem_shape_regular;
+    }
+
+    int B = size<0>(problem_shape_memory);
 
     // heads last profile, with torch's "contiguous layout"
     // shape: (batch, heads, seqlen, dim)
     // stride: (dim*heads*seqlen, dim*heads, dim, 1)
     auto stride_Q = make_stride(
-        static_cast<int64_t>(dim_aligned * heads) *
-            static_cast<int64_t>(seqlen_Q),
-        dim_aligned,
-        dim_aligned * heads,
+        B == 1 ? 0
+               : static_cast<int64_t>(dim * heads) *
+                static_cast<int64_t>(seqlen_Q),
+        dim,
+        dim * heads,
         _1{});
     auto stride_O = stride_Q;
     auto stride_K = make_stride(
-        static_cast<int64_t>(dim_aligned * heads) *
-            static_cast<int64_t>(seqlen_KV),
-        dim_aligned,
-        dim_aligned * heads,
+        B == 1 ? 0
+               : static_cast<int64_t>(dim * heads) *
+                static_cast<int64_t>(seqlen_KV),
+        dim,
+        dim * heads,
         _1{});
     auto stride_V = stride_K;
     auto stride_LSE = make_stride(
-        static_cast<int64_t>(heads) * static_cast<int64_t>(seqlen_Q),
+        B == 1 ? 0
+               : static_cast<int64_t>(heads) * static_cast<int64_t>(seqlen_Q),
         _1{},
         heads);
 
@@ -141,19 +194,40 @@ struct KernelBackward {
             hw_info.device_id);
 
     Arguments arguments{
-        problem_shape, reinterpret_cast<Element*>(ptr_Q),
-        stride_Q,      reinterpret_cast<Element*>(ptr_K),
-        stride_K,      reinterpret_cast<Element*>(ptr_V),
-        stride_V,      reinterpret_cast<Element*>(ptr_O),
-        stride_O,      reinterpret_cast<ElementAccumulator*>(ptr_LSE),
-        stride_LSE,    reinterpret_cast<Element*>(ptr_dO),
-        stride_O,      reinterpret_cast<Element*>(ptr_dQ),
-        stride_Q,      reinterpret_cast<Element*>(ptr_dK),
-        stride_K,      reinterpret_cast<Element*>(ptr_dV),
-        stride_V,      q_shape,
-        kv_shape,      qkv_shape,
-        window_size,   stride,
-        dilation,      attn_scale,
+        problem_shape_launch,
+        reinterpret_cast<Element*>(ptr_Q),
+        stride_Q,
+        reinterpret_cast<Element*>(ptr_K),
+        stride_K,
+        reinterpret_cast<Element*>(ptr_V),
+        stride_V,
+        reinterpret_cast<Element*>(ptr_O),
+        stride_O,
+        reinterpret_cast<ElementAccumulator*>(ptr_LSE),
+        stride_LSE,
+        reinterpret_cast<Element*>(ptr_dO),
+        stride_O,
+        reinterpret_cast<Element*>(ptr_dQ),
+        stride_Q,
+        reinterpret_cast<Element*>(ptr_dK),
+        stride_K,
+        reinterpret_cast<Element*>(ptr_dV),
+        stride_V,
+        q_shape,
+        kv_shape,
+        qkv_shape,
+        window_size,
+        stride,
+        dilation,
+        // varlen (var-sized)
+        reinterpret_cast<NADim*>(ptr_token_layouts),
+        reinterpret_cast<BatchMap*>(ptr_batch_map),
+        // var-param
+        reinterpret_cast<NADim*>(ptr_window_sizes),
+        reinterpret_cast<NADim*>(ptr_strides),
+        reinterpret_cast<NADim*>(ptr_dilations),
+        //
+        attn_scale,
         hw_info};
 
     return arguments;
