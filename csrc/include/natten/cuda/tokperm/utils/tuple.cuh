@@ -23,49 +23,18 @@
 
 #pragma once
 
+#include <cute/int_tuple.hpp>
 #include <cute/layout.hpp>
-#include <cute/tensor.hpp>
-#include <cutlass/arch/arch.h>
-#include <cutlass/cutlass.h>
-#include <cutlass/device_kernel.h>
-
-#include <natten/cuda/utils/cutlass.cuh>
-
-#include <natten/cuda/tokperm/utils/stride.cuh>
+#include <cute/stride.hpp>
 
 namespace natten::tokperm::utils {
 
-using namespace cute;
+template <typename T, size_t... Is>
+auto make_tuple_type_impl(cute::index_sequence<Is...>)
+    -> cute::tuple<decltype((void)Is, T{})...>;
 
-// `permute_tokens`: utility for applying permutations to arbitrary-sized token
-// views. Expects rank-4 inputs (batch, (*tokens), heads, head_dim)
-//
-// NOTE: does not check Permutation to ensure it's a valid permutation
-// I.e. permute_tokens<1,1> repeats token dimension 1 without raising an error.
-template <int... Permutation, class ProblemShape>
-CUTE_HOST_DEVICE constexpr ProblemShape permute_tokens(
-    ProblemShape problem_shape) {
-  static_assert(rank(ProblemShape{}) == 4);
-
-  return cute::make_tuple(
-      get<0>(problem_shape),
-      select<Permutation...>(get<1>(problem_shape)),
-      get<2>(problem_shape),
-      get<3>(problem_shape));
-}
-
-// `permute_tokens_varlen`
-// Expects rank-2 inputs ((*tokens), heads * head_dim)
-//
-// NOTE: does not check Permutation to ensure it's a valid permutation
-// I.e. permute_tokens<1,1> repeats token dimension 1 without raising an error.
-template <int... Permutation, class ProblemShape>
-CUTE_HOST_DEVICE constexpr ProblemShape permute_tokens_varlen(
-    ProblemShape problem_shape) {
-  static_assert(rank(ProblemShape{}) == 2);
-
-  return cute::make_tuple(
-      select<Permutation...>(get<0>(problem_shape)), get<1>(problem_shape));
-}
+template <size_t N, typename T>
+using make_tuple_type =
+    decltype(make_tuple_type_impl<T>(cute::make_index_sequence<N>{}));
 
 } // namespace natten::tokperm::utils

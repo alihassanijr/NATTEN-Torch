@@ -29,27 +29,29 @@
 #include <cutlass/cutlass.h>
 #include <cutlass/device_kernel.h>
 
+#include <natten/cuda/tokperm/token_permute_varlen_kernel.cuh>
 #include <natten/cuda/utils/cutlass.cuh>
-
-#include <natten/cuda/tokperm/layouts.hpp>
-#include <natten/cuda/tokperm/token_permute_kernel.cuh>
-#include <natten/cuda/tokperm/utils/permute.cuh>
-#include <natten/cuda/tokperm/utils/stride.cuh>
-#include <natten/cuda/tokperm/utils/tuple.cuh>
 
 namespace natten::tokperm {
 
 using namespace cute;
 
-template <typename ElementIn, typename ElementOut, typename CuteTuple>
-bool token_permute_op(
-    ElementIn* ptr_in,
-    ElementOut* ptr_out,
+template <
+    typename ElementSrc,
+    typename ElementDst,
+    typename ElementOffset,
+    typename CuteTuple>
+bool token_permute_varlen_op(
+    ElementSrc* ptr_src,
+    ElementDst* ptr_dst,
     int batch,
+    int seqlen_max,
     int heads,
-    int seqlen_out,
     int dim,
-    CuteTuple& token_layout,
+    ElementOffset* ptr_offsets_original, // size: batch + 1
+    ElementOffset* ptr_offsets_tokperm, // size: batch + 1
+    CuteTuple* ptr_token_layouts,
+    CuteTuple* ptr_dilations,
     CuteTuple& tile_shape,
     CuteTuple& dilation,
     bool flip_tiled_dims,
@@ -63,44 +65,28 @@ bool token_permute_op(
   // (token mode/dim) -> (tile, dilation, rest)
   using DimOut = utils::make_tuple_type<NumDims * 3, int>;
 
-  auto rest = ceil_div(ceil_div(token_layout, tile_shape), dilation);
-
-  auto problem_shape_in = cute::make_tuple(batch, token_layout, heads, dim);
-  auto stride_in = utils::make_torch_contiguous_stride(problem_shape_in);
-
-  auto layout_out = make_token_permuted_layout(
-      rest, tile_shape, dilation, batch, heads, dim, flip_tiled_dims);
-
-  auto problem_shape_out = layout_out.shape();
-  auto stride_out = layout_out.stride();
-
-  if (cute::size<1>(problem_shape_out) != seqlen_out) {
-    std::cerr << "Token Permute output must have sequence length of exactly "
-              << cute::size<1>(problem_shape_out)
-              << ", got tensor with sequence length " << seqlen_out << "!"
-              << std::endl;
-    return false;
-  }
-
-  using OperationAlign1 = kernel::TokenPermuteKernel<
+  using OperationAlign1 = kernel::TokenPermuteVarlenKernel<
       DimIn,
       DimOut,
-      ElementIn,
-      ElementOut,
+      ElementSrc,
+      ElementDst,
+      ElementOffset,
       /* IsUnpermute = */ false,
       1>;
-  using OperationAlign4 = kernel::TokenPermuteKernel<
+  using OperationAlign4 = kernel::TokenPermuteVarlenKernel<
       DimIn,
       DimOut,
-      ElementIn,
-      ElementOut,
+      ElementSrc,
+      ElementDst,
+      ElementOffset,
       /* IsUnpermute = */ false,
       4>;
-  using OperationAlign8 = kernel::TokenPermuteKernel<
+  using OperationAlign8 = kernel::TokenPermuteVarlenKernel<
       DimIn,
       DimOut,
-      ElementIn,
-      ElementOut,
+      ElementSrc,
+      ElementDst,
+      ElementOffset,
       /* IsUnpermute = */ false,
       8>;
 
@@ -109,19 +95,23 @@ bool token_permute_op(
     using Arguments = typename Operation::Arguments;
 
     Arguments arguments{
-        problem_shape_in,
-        problem_shape_out,
-        ptr_in,
-        ptr_out,
-        stride_in,
-        stride_out,
-        rest,
+        batch,
+        seqlen_max,
+        heads,
+        dim,
+        ptr_token_layouts,
+        ptr_dilations,
+        ptr_offsets_original,
+        ptr_offsets_tokperm,
+        ptr_src,
+        ptr_dst,
         tile_shape,
         dilation,
+        flip_tiled_dims,
     };
 
     if (not op.can_implement(arguments)) {
-      std::cerr << "Token Permute kernel is not supported." << std::endl;
+      std::cerr << "Varlen Token Permute kernel is not supported." << std::endl;
       return false;
     }
 
@@ -154,14 +144,22 @@ bool token_permute_op(
   }
 }
 
-template <typename ElementIn, typename ElementOut, typename CuteTuple>
-bool token_unpermute_op(
-    ElementIn* ptr_in,
-    ElementOut* ptr_out,
+template <
+    typename ElementSrc,
+    typename ElementDst,
+    typename ElementOffset,
+    typename CuteTuple>
+bool token_unpermute_varlen_op(
+    ElementSrc* ptr_src,
+    ElementDst* ptr_dst,
     int batch,
+    int seqlen_max,
     int heads,
     int dim,
-    CuteTuple& token_layout,
+    ElementOffset* ptr_offsets_original, // size: batch + 1
+    ElementOffset* ptr_offsets_tokperm, // size: batch + 1
+    CuteTuple* ptr_token_layouts,
+    CuteTuple* ptr_dilations,
     CuteTuple& tile_shape,
     CuteTuple& dilation,
     bool flip_tiled_dims,
@@ -175,36 +173,28 @@ bool token_unpermute_op(
   // (token mode/dim) -> (tile, dilation, rest)
   using DimIn = utils::make_tuple_type<NumDims * 3, int>;
 
-  auto rest = ceil_div(ceil_div(token_layout, tile_shape), dilation);
-
-  auto problem_shape_out = cute::make_tuple(batch, token_layout, heads, dim);
-  auto stride_out = utils::make_torch_contiguous_stride(problem_shape_out);
-
-  auto layout_in = make_token_permuted_layout(
-      rest, tile_shape, dilation, batch, heads, dim, flip_tiled_dims);
-
-  auto problem_shape_in = layout_in.shape();
-  auto stride_in = layout_in.stride();
-
-  using OperationAlign1 = kernel::TokenPermuteKernel<
+  using OperationAlign1 = kernel::TokenPermuteVarlenKernel<
       DimIn,
       DimOut,
-      ElementIn,
-      ElementOut,
+      ElementSrc,
+      ElementDst,
+      ElementOffset,
       /* IsUnpermute = */ true,
       1>;
-  using OperationAlign4 = kernel::TokenPermuteKernel<
+  using OperationAlign4 = kernel::TokenPermuteVarlenKernel<
       DimIn,
       DimOut,
-      ElementIn,
-      ElementOut,
+      ElementSrc,
+      ElementDst,
+      ElementOffset,
       /* IsUnpermute = */ true,
       4>;
-  using OperationAlign8 = kernel::TokenPermuteKernel<
+  using OperationAlign8 = kernel::TokenPermuteVarlenKernel<
       DimIn,
       DimOut,
-      ElementIn,
-      ElementOut,
+      ElementSrc,
+      ElementDst,
+      ElementOffset,
       /* IsUnpermute = */ true,
       8>;
 
@@ -213,15 +203,19 @@ bool token_unpermute_op(
     using Arguments = typename Operation::Arguments;
 
     Arguments arguments{
-        problem_shape_in,
-        problem_shape_out,
-        ptr_in,
-        ptr_out,
-        stride_in,
-        stride_out,
-        rest,
+        batch,
+        seqlen_max,
+        heads,
+        dim,
+        ptr_token_layouts,
+        ptr_dilations,
+        ptr_offsets_original,
+        ptr_offsets_tokperm,
+        ptr_src,
+        ptr_dst,
         tile_shape,
         dilation,
+        flip_tiled_dims,
     };
 
     if (not op.can_implement(arguments)) {

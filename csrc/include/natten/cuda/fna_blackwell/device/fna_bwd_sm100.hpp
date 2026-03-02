@@ -64,55 +64,6 @@ template <
     class NADim>
 class FnaBwdSm100 {
  public:
-  /// Argument structure: User API
-  struct Arguments {
-    // Q K D D_VO HB
-    ProblemShape problem_shape;
-
-    const Element* ptr_Q;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int>>
-        stride_Q;
-    const Element* ptr_K;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int>>
-        stride_K;
-    const Element* ptr_V;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int>>
-        stride_V;
-
-    const Element* ptr_O;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int>>
-        stride_O;
-    const ElementAccumulator* ptr_LSE;
-    // NATTEN has a different LSE layout
-    cute::tuple<int, cute::tuple<cute::tuple<_1, int>, int>> stride_LSE;
-
-    const Element* ptr_dO;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int>>
-        stride_dO;
-
-    Element* ptr_dQ;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int>>
-        stride_dQ;
-    Element* ptr_dK;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int>>
-        stride_dK;
-    Element* ptr_dV;
-    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int>>
-        stride_dV;
-
-    // (F)NA parameters
-    NADim q_shape;
-    NADim kv_shape;
-    NADim qkv_shape;
-    NADim window_size;
-    NADim stride;
-    NADim dilation;
-
-    ElementAccumulator softmax_scale;
-
-    cutlass::KernelHardwareInfo hw_info;
-  };
-
   using OperationSumOdO = cutlass::fna::device::FnaSm100<
       cutlass::fmha::kernel::
           FmhaKernelBwdSumOdO<ProblemShape, Element, ElementAccumulator>>;
@@ -131,6 +82,63 @@ class FnaBwdSm100 {
           KVTileShape,
           NADim>>;
   using Kernel = typename Operation::Kernel;
+  using BatchMap = typename Kernel::BatchMap;
+
+  /// Argument structure: User API
+  struct Arguments {
+    // Q K D D_VO HB
+    ProblemShape problem_shape;
+
+    const Element* ptr_Q;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int64_t>>
+        stride_Q;
+    const Element* ptr_K;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int64_t>>
+        stride_K;
+    const Element* ptr_V;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int64_t>>
+        stride_V;
+
+    const Element* ptr_O;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int64_t>>
+        stride_O;
+    const ElementAccumulator* ptr_LSE;
+    // NATTEN has a different LSE layout
+    cute::tuple<int, cute::tuple<cute::tuple<_1, int>, int64_t>> stride_LSE;
+
+    const Element* ptr_dO;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int64_t>>
+        stride_dO;
+
+    Element* ptr_dQ;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int64_t>>
+        stride_dQ;
+    Element* ptr_dK;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int64_t>>
+        stride_dK;
+    Element* ptr_dV;
+    cute::tuple<int, cute::_1, cute::tuple<cute::tuple<cute::_0, int>, int64_t>>
+        stride_dV;
+
+    // (F)NA parameters
+    NADim q_shape;
+    NADim kv_shape;
+    NADim qkv_shape;
+    NADim window_size;
+    NADim stride;
+    NADim dilation;
+    // varlen (var-sized)
+    NADim* ptr_token_layouts;
+    BatchMap* ptr_batch_map;
+    // var-param
+    NADim* ptr_window_sizes;
+    NADim* ptr_strides;
+    NADim* ptr_dilations;
+
+    ElementAccumulator softmax_scale;
+
+    cutlass::KernelHardwareInfo hw_info;
+  };
 
   struct Params {
     OperationSumOdO op_sum_OdO;
@@ -154,9 +162,19 @@ class FnaBwdSm100 {
     D = cutlass::round_up(D, 8); // Alignment
     int Q = cutlass::round_up(static_cast<int>(Q_), 8); // Alignment
     auto stride_sum_OdO = make_stride(
-        _1{}, make_stride(make_stride(Q, Q * H_R), B == 1 ? 0 : Q * H_R * H_K));
+        _1{},
+        make_stride(
+            make_stride(Q, Q * H_R),
+            B == 1
+                ? 0
+                : static_cast<int64_t>(Q) * static_cast<int64_t>(H_R * H_K)));
     auto stride_scaled_lse = make_stride(
-        _1{}, make_stride(make_stride(Q, Q * H_R), B == 1 ? 0 : Q * H_R * H_K));
+        _1{},
+        make_stride(
+            make_stride(Q, Q * H_R),
+            B == 1
+                ? 0
+                : static_cast<int64_t>(Q) * static_cast<int64_t>(H_R * H_K)));
     auto log2_e = log2f(expf(1.0f));
     return typename OperationSumOdO::Arguments{
         args.problem_shape,
@@ -187,7 +205,10 @@ class FnaBwdSm100 {
         D,
         _1{},
         make_stride(
-            make_stride(D * Q, D * Q * H_R), B == 1 ? 0 : D * Q * H_R * H_K));
+            make_stride(D * Q, D * Q * H_R),
+            B == 1 ? 0
+                   : static_cast<int64_t>(D * H_R * H_K) *
+                    static_cast<int64_t>(Q)));
     return typename OperationConvert::Arguments{
         args.problem_shape,
         src,
@@ -208,23 +229,34 @@ class FnaBwdSm100 {
   static typename Operation::Arguments to_bwd_arguments(
       Arguments const& args,
       ElementAccumulator* sum_OdO = nullptr,
-      cute::tuple<cute::_1, cute::tuple<cute::tuple<int, int>, int>> const&
+      cute::tuple<cute::_1, cute::tuple<cute::tuple<int, int>, int64_t>> const&
           stride_sum_OdO = {},
       ElementAccumulator* scaled_lse = nullptr,
-      cute::tuple<cute::_1, cute::tuple<cute::tuple<int, int>, int>> const&
+      cute::tuple<cute::_1, cute::tuple<cute::tuple<int, int>, int64_t>> const&
           stride_scaled_lse = {},
       ElementAccumulator* dQ_acc = nullptr,
-      cute::tuple<int, cute::_1, cute::tuple<cute::tuple<int, int>, int>> const&
-          stride_dQ = {}) {
+      cute::tuple<
+          int,
+          cute::_1,
+          cute::tuple<cute::tuple<int, int>, int64_t>> const& stride_dQ = {}) {
     return typename Operation::Arguments{
         args.problem_shape,
         // FNA args
-        {args.q_shape,
-         args.kv_shape,
-         args.qkv_shape,
-         args.window_size,
-         args.stride,
-         args.dilation},
+        {
+            args.q_shape,
+            args.kv_shape,
+            args.qkv_shape,
+            args.window_size,
+            args.stride,
+            args.dilation,
+            // varlen (var-sized)
+            args.ptr_token_layouts,
+            args.ptr_batch_map,
+            // var-param
+            args.ptr_window_sizes,
+            args.ptr_strides,
+            args.ptr_dilations,
+        },
         {args.ptr_Q,
          args.stride_Q,
          args.ptr_K,

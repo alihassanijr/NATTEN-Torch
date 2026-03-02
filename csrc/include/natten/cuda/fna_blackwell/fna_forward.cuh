@@ -53,7 +53,8 @@ template <
     class QTileShape,
     class KVTileShape,
     class TileShape,
-    bool kIsPersistent>
+    bool kIsPersistent,
+    bool kIsVarlen>
 struct KernelForward {
   static_assert(
       rank(QTileShape{}) == 1 || rank(QTileShape{}) == 2 ||
@@ -71,22 +72,30 @@ struct KernelForward {
   using ElementAccumulatorQK = float;
   using ElementAccumulatorPV = float;
   using ElementOut = Element;
+  using VariableLength = cutlass::fmha::collective::VariableLength;
 
-  // Q K D (B H)
-  using ProblemShapeType =
+  // Q K D ((H_R, H_K) B)
+  using ProblemShapeRegular =
       cute::tuple<int, int, int, cute::tuple<cute::tuple<int, int>, int>>;
+  using ProblemShapeVarlen = cute::tuple<
+      VariableLength,
+      VariableLength,
+      int,
+      cute::tuple<cute::tuple<int, int>, int>>;
+  using ProblemShapeType =
+      std::conditional_t<kIsVarlen, ProblemShapeVarlen, ProblemShapeRegular>;
 
-  using StrideQ =
-      cute::tuple<int, _1, cute::tuple<cute::tuple<int, int>, int>>; // Q D (H_G
-                                                                     // H_R B)
-  using StrideK =
-      cute::tuple<int, _1, cute::tuple<cute::tuple<_0, int>, int>>; // K D (H_G
-                                                                    // H_R B)
+  using StrideQ = cute::
+      tuple<int, _1, cute::tuple<cute::tuple<int, int>, int64_t>>; // Q D (H_G
+                                                                   // H_R B)
+  using StrideK = cute::
+      tuple<int, _1, cute::tuple<cute::tuple<_0, int>, int64_t>>; // K D (H_G
+                                                                  // H_R B)
   using StrideV = StrideK;
   using StrideO = StrideQ;
   using StrideLSE =
-      cute::tuple<int, cute::tuple<cute::tuple<_1, int>, int>>; // Q   (H_G H_R
-                                                                // B)
+      cute::tuple<int, cute::tuple<cute::tuple<_1, int>, int64_t>>; // Q   (H_G
+                                                                    // H_R B)
 
   using TileScheduler = std::conditional_t<
       kIsPersistent,
@@ -102,10 +111,11 @@ struct KernelForward {
           StrideQ,
           StrideK,
           StrideV,
-          NeighborhoodAttentionMask<Causal>,
+          NeighborhoodAttentionMask<QTileShape, KVTileShape, Causal>,
           QTileShape,
           KVTileShape,
-          NADim>;
+          NADim,
+          kIsVarlen>;
   using Operation = cutlass::fna::device::FnaSm100<
       cutlass::fna::kernel::Sm100FnaFwdKernelTmaWarpspecialized<
           ProblemShapeType,
@@ -119,6 +129,7 @@ struct KernelForward {
           TileScheduler>>;
 
   using Arguments = typename Operation::Arguments;
+  using BatchMap = typename Operation::Kernel::BatchMap;
 
   Operation op;
 
@@ -142,6 +153,17 @@ struct KernelForward {
       NADim window_size,
       NADim stride,
       NADim dilation,
+      // varlen parameters
+      int max_seqlen_Q,
+      int max_seqlen_KV,
+      void* ptr_cumulative_seqlen_Q,
+      void* ptr_cumulative_seqlen_KV,
+      void* ptr_token_layouts,
+      void* ptr_batch_map,
+      // var-param parameters
+      void* ptr_window_sizes,
+      void* ptr_strides,
+      void* ptr_dilations,
       // init/launch params
       int device_id) {
     auto problem_shape_regular = cute::make_tuple(
@@ -156,8 +178,24 @@ struct KernelForward {
     ProblemShapeType problem_shape_launch;
     decltype(problem_shape_regular) problem_shape_memory;
 
-    problem_shape_memory = problem_shape_regular;
-    problem_shape_launch = problem_shape_regular;
+    if constexpr (kIsVarlen) {
+      problem_shape_memory = problem_shape_regular;
+      get<3, 1>(problem_shape_memory) = 1;
+
+      get<0>(problem_shape_launch) = VariableLength{
+          max_seqlen_Q,
+          reinterpret_cast<int*>(ptr_cumulative_seqlen_Q),
+          seqlen_Q};
+      get<1>(problem_shape_launch) = VariableLength{
+          max_seqlen_KV,
+          reinterpret_cast<int*>(ptr_cumulative_seqlen_KV),
+          seqlen_KV};
+      get<2>(problem_shape_launch) = get<2>(problem_shape_regular);
+      get<3>(problem_shape_launch) = get<3>(problem_shape_regular);
+    } else {
+      problem_shape_memory = problem_shape_regular;
+      problem_shape_launch = problem_shape_regular;
+    }
 
     // get<2>(problem_shape_memory) =
     //     cutlass::round_up(get<2>(problem_shape_memory), 8); // alignment
@@ -174,13 +212,32 @@ struct KernelForward {
     // shape: (batch, seqlen, heads, dim)
     // stride: (dim*heads*seqlen, dim*heads, dim, 1)
     auto stride_Q = make_stride(
-        H * D, _1{}, make_stride(make_stride(D, H_Q * D), H * D * SQ));
+        H * D,
+        _1{},
+        make_stride(
+            make_stride(D, H_Q * D),
+            static_cast<int64_t>(H * D) * static_cast<int64_t>(SQ)));
     auto stride_O = stride_Q;
     auto stride_K = make_stride(
-        H_K * D, _1{}, make_stride(make_stride(_0{}, D), H_K * D * SK));
+        H_K * D,
+        _1{},
+        make_stride(
+            make_stride(_0{}, D),
+            static_cast<int64_t>(H_K * D) * static_cast<int64_t>(SK)));
     auto stride_V = stride_K;
-    auto stride_LSE =
-        make_stride(H, make_stride(make_stride(_1{}, H_Q), SQ * H));
+    auto stride_LSE = make_stride(
+        H,
+        make_stride(
+            make_stride(_1{}, H_Q),
+            static_cast<int64_t>(SQ) * static_cast<int64_t>(H)));
+
+    if (kIsVarlen) {
+      get<2, 1>(stride_Q) = 0;
+      get<2, 1>(stride_K) = 0;
+      get<2, 1>(stride_V) = 0;
+      get<2, 1>(stride_O) = 0;
+      get<1, 1>(stride_LSE) = 0;
+    }
 
     cutlass::KernelHardwareInfo hw_info;
     hw_info.device_id = device_id;
@@ -202,6 +259,14 @@ struct KernelForward {
          window_size,
          stride,
          dilation,
+         // varlen (var-sized)
+         reinterpret_cast<NADim*>(ptr_token_layouts),
+         reinterpret_cast<BatchMap*>(ptr_batch_map),
+         // var-param
+         reinterpret_cast<NADim*>(ptr_window_sizes),
+         reinterpret_cast<NADim*>(ptr_strides),
+         reinterpret_cast<NADim*>(ptr_dilations),
+         //
          attn_scale},
         {reinterpret_cast<Element*>(ptr_O),
          stride_O,

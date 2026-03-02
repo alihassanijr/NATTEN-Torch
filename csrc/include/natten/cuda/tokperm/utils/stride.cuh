@@ -26,6 +26,8 @@
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
 
+#include <natten/cuda/tokperm/utils/tuple.cuh>
+
 namespace natten::tokperm::utils {
 
 using namespace cute;
@@ -34,25 +36,42 @@ namespace detail {
 
 template <class Shape>
 struct StrideHelper {
-  static_assert(cute::rank(Shape{}) >= 1);
+  static_assert(cute::rank(Shape{}) >= 2);
   static_assert(depth(Shape{}) == 1);
   static constexpr int Rank = cute::rank(Shape{});
 
-  using StrideType = decltype(replace<Rank - 1>(Shape{}, _1{}));
+  using StrideType_ = utils::make_tuple_type<Rank - 2, int64_t>;
+  // stride for heads can be int32
+  using StrideType = decltype(append(append(StrideType_{}, int{}), _1{}));
 
   CUTE_HOST_DEVICE static constexpr StrideType make_stride(Shape const& shape) {
-    if constexpr (Rank == 1) {
-      return make_stride(_1{});
-    }
-
     StrideType stride;
+
+    get<Rank - 1>(stride) = _1{}; // dim
+    get<Rank - 2>(stride) = get<Rank - 1>(shape); // heads
+    cute::for_each(cute::make_range<0, Rank - 1>{}, [&](auto i) {
+      static_assert(i < Rank - 1);
+      get<Rank - i - 2>(stride) =
+          static_cast<int64_t>(get<Rank - i - 1>(shape)) *
+          get<Rank - i - 1>(stride);
+    });
+
+    return stride;
+  }
+
+  using StrideTypeHeadless =
+      decltype(append(utils::make_tuple_type<Rank - 1, int64_t>{}, _1{}));
+  CUTE_HOST_DEVICE static constexpr StrideTypeHeadless make_headless_stride(
+      Shape const& shape) {
+    StrideTypeHeadless stride;
 
     get<Rank - 1>(stride) = _1{};
     get<Rank - 2>(stride) = get<Rank - 1>(shape);
     cute::for_each(cute::make_range<0, Rank - 1>{}, [&](auto i) {
       static_assert(i < Rank - 1);
       get<Rank - i - 2>(stride) =
-          get<Rank - i - 1>(shape) * get<Rank - i - 1>(stride);
+          static_cast<int64_t>(get<Rank - i - 1>(shape)) *
+          get<Rank - i - 1>(stride);
     });
 
     return stride;
@@ -67,6 +86,16 @@ CUTE_HOST_DEVICE static constexpr auto make_torch_contiguous_stride(
   auto flattened_shape = cute::flatten(shape);
   auto flattened_stride =
       detail::StrideHelper<decltype(flattened_shape)>::make_stride(
+          flattened_shape);
+  return cute::unflatten(flattened_stride, shape);
+}
+
+template <class Shape>
+CUTE_HOST_DEVICE static constexpr auto make_torch_contiguous_stride_headless(
+    Shape const& shape) {
+  auto flattened_shape = cute::flatten(shape);
+  auto flattened_stride =
+      detail::StrideHelper<decltype(flattened_shape)>::make_headless_stride(
           flattened_shape);
   return cute::unflatten(flattened_stride, shape);
 }
