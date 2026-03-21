@@ -9,6 +9,9 @@
     * Removed extra memory op on LSE in backward pass (both FMHA and FNA)
 * Added build flags for adding lineinfo and building with PTX (`NATTEN_BUILD_WITH_PTX`,
     `NATTEN_BUILD_WITH_LINEINFO`).
+* Experimental kernels and API for Variable Length Fused Neighborhood Attention (Varlen FNA),
+    supported in Hopper and Blackwell FNA kernels.
+    Refer to [Flex FNA/FMHA](docs/varlen.md) for more information.
 
 ## [0.21.5] - 2026-02-08
 * Extended Attention (FMHA) functionality:

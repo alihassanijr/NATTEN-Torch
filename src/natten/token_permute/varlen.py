@@ -24,7 +24,7 @@
 import math
 from collections.abc import Mapping
 from functools import partial
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -258,6 +258,7 @@ def _verify_variable_parameters(
 
 
 def generate_fna_varlen_metadata(
+    backend: str,
     token_layout_list: List[DimensionType],
     q_tile_shape: DimensionType,
     kv_tile_shape: DimensionType,
@@ -273,6 +274,8 @@ def generate_fna_varlen_metadata(
     kernel_size_list: VariableDimensionType = None,
     stride_list: VariableDimensionType = None,
     dilation_list: VariableDimensionType = None,
+    #
+    extra_kwargs: Optional[dict[str, Any]] = None,
 ) -> dict:
     """
     Takes list of token layouts and produces metadata required for performing variable-length
@@ -296,6 +299,9 @@ def generate_fna_varlen_metadata(
     For example, token_layout_list = [(16, 16), (16, 32, 32)] is invalid!
 
     Parameters:
+        backend (str): Backend implementation to run with. Refer to [backends](backends.md) for more
+            information.
+
         token_layout_list (list[tuple]): list of token layouts that describe the various independent
             sets of tokens / sequences in QKV. All elements must be integer tuples of size 1, 2, or
             3, and match each other in size as well.
@@ -333,6 +339,10 @@ def generate_fna_varlen_metadata(
 
         dilation_list (Optional[list[tuple]]): (VarParam) List of dilation parameters, in
             case different sets of tokens have varying dilation values.
+
+    Other Parameters:
+        extra_kwargs (dict): Additional performance arguments required by the backend (i.e.
+            kernel_schedule in Hopper FNA.)
 
     Outputs:
         metadata (dict): Metadata required by token_{permute,unpermute}_varlen_operation and the
@@ -383,7 +393,10 @@ def generate_fna_varlen_metadata(
     if backward_kv_tile_shape is not None:
         metadata_kv_bwd = gen_metadata(tile_shape=backward_kv_tile_shape)
 
+    extra_kwargs = extra_kwargs or {}
+
     return {
+        "backend": backend,
         "na_dim": na_dim,
         "batch_size": batch_size,
         "q_tile_shape": q_tile_shape,
@@ -403,6 +416,7 @@ def generate_fna_varlen_metadata(
         "kernel_sizes": kernel_sizes,
         "strides": strides,
         "dilations": dilations,
+        **extra_kwargs,
     }
 
 
