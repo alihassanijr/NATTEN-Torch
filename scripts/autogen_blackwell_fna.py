@@ -125,6 +125,7 @@ void {kernel_name}(
         heads_kv,
         dim,
         attn_scale,
+        // fna
         q_shape,
         kv_shape,
         qkv_shape,

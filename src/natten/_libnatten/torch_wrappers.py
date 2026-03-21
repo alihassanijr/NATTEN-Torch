@@ -924,6 +924,15 @@ def make_hopper_fna_ops(na_dim):
         q_tile_shape: list[int],
         kv_tile_shape: list[int],
         kernel_schedule_int: int,
+        cumulative_seqlen_Q: Optional[Tensor],
+        cumulative_seqlen_KV: Optional[Tensor],
+        token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
+        max_seqlen_Q: int,
+        max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
 
@@ -951,6 +960,15 @@ def make_hopper_fna_ops(na_dim):
             q_tile_shape,
             kv_tile_shape,
             kernel_schedule_int,
+            cumulative_seqlen_Q,
+            cumulative_seqlen_KV,
+            token_layouts,
+            batch_map,
+            max_seqlen_Q,
+            max_seqlen_KV,
+            kernel_sizes,
+            strides,
+            dilations,
         )
 
         return output, logsumexp
@@ -971,6 +989,15 @@ def make_hopper_fna_ops(na_dim):
         q_tile_shape: list[int],
         kv_tile_shape: list[int],
         kernel_schedule_int: int,
+        cumulative_seqlen_Q: Optional[Tensor],
+        cumulative_seqlen_KV: Optional[Tensor],
+        token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
+        max_seqlen_Q: int,
+        max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
 
@@ -1006,6 +1033,15 @@ def make_hopper_fna_ops(na_dim):
         qkv_shape: list[int],
         q_tile_shape: list[int],
         kv_tile_shape: list[int],
+        cumulative_seqlen_Q: Optional[Tensor],
+        cumulative_seqlen_KV: Optional[Tensor],
+        token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
+        max_seqlen_Q: int,
+        max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
         output, d_output, logsumexp = [
@@ -1036,6 +1072,15 @@ def make_hopper_fna_ops(na_dim):
             qkv_shape,
             q_tile_shape,
             kv_tile_shape,
+            cumulative_seqlen_Q,
+            cumulative_seqlen_KV,
+            token_layouts,
+            batch_map,
+            max_seqlen_Q,
+            max_seqlen_KV,
+            kernel_sizes,
+            strides,
+            dilations,
         )
 
         return d_query, d_key, d_value
@@ -1058,6 +1103,15 @@ def make_hopper_fna_ops(na_dim):
         qkv_shape: list[int],
         q_tile_shape: list[int],
         kv_tile_shape: list[int],
+        cumulative_seqlen_Q: Optional[Tensor],
+        cumulative_seqlen_KV: Optional[Tensor],
+        token_layouts: Optional[Tensor],
+        batch_map: Optional[Tensor],
+        max_seqlen_Q: int,
+        max_seqlen_KV: int,
+        kernel_sizes: Optional[Tensor],
+        strides: Optional[Tensor],
+        dilations: Optional[Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor]:
         query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
         output, d_output, logsumexp = [

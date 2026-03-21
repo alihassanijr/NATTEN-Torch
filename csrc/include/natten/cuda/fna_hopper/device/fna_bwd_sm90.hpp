@@ -74,6 +74,46 @@ template <
     class... Options>
 class FnaBwdSm90 {
  public:
+  static constexpr bool IsVarlen =
+      cutlass::fmha::collective::is_problem_shape_variable_length(
+          ProblemShape{});
+
+  using OperationSumOdO = cutlass::fna::device::FnaSm90<
+      cutlass::fmha::kernel::
+          FmhaKernelBwdSumOdO<ProblemShape, Element, ElementAccumulator>>;
+  using OperationConvert = cutlass::fna::device::FnaSm90<
+      cutlass::fmha::kernel::
+          FmhaKernelBwdConvert<ProblemShape, Element, ElementAccumulator>>;
+
+  using Mainloop =
+      cutlass::fna::collective::FnaBwdMainloopTmaWarpSpecializedSm90<
+          Element,
+          ElementAccumulator,
+          TileShape,
+          Fusion,
+          QTileShape,
+          KVTileShape,
+          NADim,
+          IsVarlen,
+          Options...>;
+
+  using Epilogue = cutlass::fmha::collective::FmhaBwdEpilogueKV<
+      Element,
+      ElementAccumulator,
+      typename Mainloop::TileShapePV,
+      IsVarlen>;
+
+  using Operation = cutlass::fna::device::FnaSm90<
+      cutlass::fmha::kernel::FmhaKernelTmaWarpSpecialized<
+          ProblemShape,
+          Mainloop,
+          Epilogue,
+          cutlass::fmha::kernel::TileSchedulerBwdAdapter<
+              cutlass::fmha::kernel::IndividualTileScheduler>,
+          Options...>>;
+
+  using BatchMap = typename Mainloop::BatchMap;
+
   /// Argument structure: User API
   struct Arguments {
     ProblemShape problem_size;
@@ -108,48 +148,19 @@ class FnaBwdSm90 {
     NADim window_size;
     NADim stride;
     NADim dilation;
+    // varlen (var-sized)
+    NADim* ptr_token_layouts;
+    BatchMap* ptr_batch_map;
+    // var-param
+    NADim* ptr_window_sizes;
+    NADim* ptr_strides;
+    NADim* ptr_dilations;
 
     // if zero, defaults to 1/sqrt(D)
     float scale_softmax = 0.0f;
 
     cutlass::KernelHardwareInfo hw_info;
   };
-
-  using OperationSumOdO = cutlass::fna::device::FnaSm90<
-      cutlass::fmha::kernel::
-          FmhaKernelBwdSumOdO<ProblemShape, Element, ElementAccumulator>>;
-  using OperationConvert = cutlass::fna::device::FnaSm90<
-      cutlass::fmha::kernel::
-          FmhaKernelBwdConvert<ProblemShape, Element, ElementAccumulator>>;
-
-  using Mainloop =
-      cutlass::fna::collective::FnaBwdMainloopTmaWarpSpecializedSm90<
-          Element,
-          ElementAccumulator,
-          TileShape,
-          Fusion,
-          QTileShape,
-          KVTileShape,
-          NADim,
-          Options...>;
-
-  static constexpr bool IsVarlen =
-      cutlass::fmha::collective::is_problem_shape_variable_length(
-          ProblemShape{});
-  using Epilogue = cutlass::fmha::collective::FmhaBwdEpilogueKV<
-      Element,
-      ElementAccumulator,
-      typename Mainloop::TileShapePV,
-      IsVarlen>;
-
-  using Operation = cutlass::fna::device::FnaSm90<
-      cutlass::fmha::kernel::FmhaKernelTmaWarpSpecialized<
-          ProblemShape,
-          Mainloop,
-          Epilogue,
-          cutlass::fmha::kernel::TileSchedulerBwdAdapter<
-              cutlass::fmha::kernel::IndividualTileScheduler>,
-          Options...>>;
 
   struct Params {
     OperationSumOdO op_sum_OdO;
@@ -243,12 +254,21 @@ class FnaBwdSm90 {
             stride_dQ,
             args.scale_softmax,
             // FNA args
-            {args.q_shape,
-             args.kv_shape,
-             args.qkv_shape,
-             args.window_size,
-             args.stride,
-             args.dilation},
+            {
+                args.q_shape,
+                args.kv_shape,
+                args.qkv_shape,
+                args.window_size,
+                args.stride,
+                args.dilation,
+                // varlen (var-sized)
+                args.ptr_token_layouts,
+                args.ptr_batch_map,
+                // var-param
+                args.ptr_window_sizes,
+                args.ptr_strides,
+                args.ptr_dilations,
+            },
         },
         {args.ptr_dK, args.stride_dK, args.ptr_dV, args.stride_dV},
         args.hw_info};

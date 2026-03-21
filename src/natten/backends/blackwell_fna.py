@@ -353,10 +353,6 @@ def make_cutlass_blackwell_fna_varlen_autograd_fn(na_dim):
     assert na_dim in [1, 2, 3]
 
     class CutlassBlackwellFnaVarlenAutogradFn(Function):
-        """
-        Varlen ops NEVER token permute -- it has to be done outside the op
-        """
-
         @staticmethod
         @amp_fwd
         def forward(

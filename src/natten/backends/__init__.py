@@ -58,9 +58,11 @@ from natten.backends.configs import (
 from natten.backends.configs.checks import (
     can_run_cutlass_blackwell_fmha,
     can_run_cutlass_blackwell_fna,
+    can_run_cutlass_blackwell_fna_varlen,
     can_run_cutlass_fna,
     can_run_cutlass_hopper_fmha,
     can_run_cutlass_hopper_fna,
+    can_run_cutlass_hopper_fna_varlen,
     can_run_flex_attention,
 )
 from natten.backends.flex import (
@@ -80,6 +82,7 @@ from natten.backends.fna import (
 from natten.backends.hopper_fmha import cutlass_hopper_fmha
 from natten.backends.hopper_fna import (
     cutlass_hopper_fna_generic,
+    cutlass_hopper_fna_varlen_generic,
     na1d_cutlass_hopper_fna,
     na2d_cutlass_hopper_fna,
     na3d_cutlass_hopper_fna,
@@ -210,13 +213,87 @@ def get_compatible_fmha_backends(
     return compatible_backends
 
 
+# NOTE: choose_varlen_backend and get_compatible_varlen_backends are only intended for varlen FNA
+# ops, not varlen FMHA!
+def choose_varlen_backend(
+    na_dim: int,
+    head_dim: int,
+    head_dim_v: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    torch_compile: bool,
+) -> str:
+    if can_run_cutlass_blackwell_fna_varlen(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        head_dim_v=head_dim_v,
+        device=device,
+        dtype=dtype,
+        requires_grad=requires_grad,
+    ):
+        logger.debug("Backend not set; picked Varlen Blackwell FNA kernel.")
+        return "blackwell-fna"
+
+    if can_run_cutlass_hopper_fna_varlen(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        head_dim_v=head_dim_v,
+        device=device,
+        dtype=dtype,
+        requires_grad=requires_grad,
+    ):
+        logger.debug("Backend not set; picked Varlen Hopper FNA kernel.")
+        return "hopper-fna"
+
+    raise NotImplementedError(
+        "NATTEN could not find a suitable varlen FNA backend for this use case. "
+        "Run with NATTEN_LOG_LEVEL=DEBUG to find out why."
+    )
+
+
+def get_compatible_varlen_backends(
+    na_dim: int,
+    head_dim: int,
+    head_dim_v: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    torch_compile: bool,
+) -> List[str]:
+    compatible_backends = []
+    if can_run_cutlass_blackwell_fna_varlen(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        head_dim_v=head_dim_v,
+        device=device,
+        dtype=dtype,
+        requires_grad=requires_grad,
+    ):
+        compatible_backends.append("blackwell-fna")
+
+    if can_run_cutlass_hopper_fna_varlen(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        head_dim_v=head_dim_v,
+        device=device,
+        dtype=dtype,
+        requires_grad=requires_grad,
+    ):
+        compatible_backends.append("hopper-fna")
+
+    return compatible_backends
+
+
 __all__ = [
     "can_run_cutlass_fmha",
     "can_run_cutlass_fna",
     "can_run_cutlass_blackwell_fmha",
     "can_run_cutlass_blackwell_fna",
+    "can_run_cutlass_blackwell_fna_varlen",
     "can_run_cutlass_hopper_fmha",
     "can_run_cutlass_hopper_fna",
+    "can_run_cutlass_hopper_fna_varlen",
     "can_run_flex_attention",
     "cutlass_fmha",
     "cutlass_fna_generic",
@@ -228,6 +305,7 @@ __all__ = [
     "cutlass_blackwell_fna_varlen_generic",
     "cutlass_hopper_fmha",
     "cutlass_hopper_fna_generic",
+    "cutlass_hopper_fna_varlen_generic",
     "na1d_cutlass_blackwell_fna",
     "na2d_cutlass_blackwell_fna",
     "na3d_cutlass_blackwell_fna",

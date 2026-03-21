@@ -239,9 +239,8 @@ struct NeighborhoodAttentionBackwardMask {
   // QKV shape Correction
   // Only if dilated and input size % dilation != 0
   // NOTE: every warp role has to execute this before using the mask!!
-  template <class ProblemShape, class QKVShape, class Dilation>
+  template <class QKVShape, class Dilation>
   CUTLASS_DEVICE auto correct_qkv_shape(
-      ProblemShape const& problem_shape,
       QKVShape const& qkv_shape, // this is pre-padding, pre-token permute, just
                                  // the original shape of the sequence mode in
                                  // the self attention
@@ -249,8 +248,8 @@ struct NeighborhoodAttentionBackwardMask {
       Dilation const& dilation,
       int num_dilation_groups) {
     auto dilation_group_idx = batch_idx % num_dilation_groups;
-
     auto dilation_group_crd = idx2crd(dilation_group_idx, dilation);
+
     return correct_qkv_shape_wrt_dilation(
         qkv_shape, dilation, dilation_group_crd);
   }

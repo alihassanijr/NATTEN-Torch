@@ -125,7 +125,7 @@ void blackwell_fna_generic_forward(
 
   TORCH_CHECK(
       query.size(0) == key.size(0),
-      "Blackwell FMHA forward: Query and key must match in batch size, got ",
+      "Blackwell FNA forward: Query and key must match in batch size, got ",
       "query.shape[0]=",
       query.size(0),
       ", key.shape[0]=",
@@ -133,7 +133,7 @@ void blackwell_fna_generic_forward(
 
   TORCH_CHECK(
       query.size(3) == key.size(3),
-      "Blackwell FMHA forward: Query and key must match in head dim, got ",
+      "Blackwell FNA forward: Query and key must match in head dim, got ",
       "query.shape[3]=",
       query.size(3),
       ", key.shape[3]=",
@@ -142,7 +142,7 @@ void blackwell_fna_generic_forward(
   // GQA/MQA is supported
   TORCH_CHECK(
       query.size(2) >= key.size(2),
-      "Blackwell FMHA forward: Query heads must be greater than or equal to key/value heads, got ",
+      "Blackwell FNA forward: Query heads must be greater than or equal to key/value heads, got ",
       "query.shape[2]=",
       query.size(2),
       ", key.shape[2]=",
@@ -150,7 +150,7 @@ void blackwell_fna_generic_forward(
 
   TORCH_CHECK(
       query.size(2) % key.size(2) == 0,
-      "Blackwell FMHA forward: Query heads must evenly divide key/value heads, got ",
+      "Blackwell FNA forward: Query heads must evenly divide key/value heads, got ",
       "query.shape[2]=",
       query.size(2),
       ", key.shape[2]=",
@@ -258,10 +258,10 @@ void blackwell_fna_generic_forward(
 
     TORCH_CHECK(
         cumulative_seqlen_Q_tensor.dim() == 1,
-        "Blackwell FMHA: cumulative_seqlen_Q is expected to be a 1-D tensor.");
+        "Blackwell FNA: cumulative_seqlen_Q is expected to be a 1-D tensor.");
     TORCH_CHECK(
         cumulative_seqlen_KV_tensor.dim() == 1,
-        "Blackwell FMHA: cumulative_seqlen_KV is expected to be a 1-D tensor.");
+        "Blackwell FNA: cumulative_seqlen_KV is expected to be a 1-D tensor.");
 
     TORCH_CHECK(
         cumulative_seqlen_Q_tensor.size(0) ==
@@ -287,11 +287,6 @@ void blackwell_fna_generic_forward(
     TORCH_CHECK(
         token_layouts_tensor.dim() == 2,
         "Blackwell FNA: token_layouts is expected to be a 2-D tensor.");
-
-    // TORCH_CHECK(
-    //     token_layouts_tensor.size(0) == batch_size_original,
-    //     "Blackwell FNA: token_layouts.shape[0] must be
-    //     cumulative_seqlen_{Q,KV}.shape[0] - 1.");
 
     TORCH_CHECK(
         token_layouts_tensor.size(1) == kNADim,

@@ -294,9 +294,8 @@ struct NeighborhoodAttentionMask {
   // QKV shape Correction
   // Only if dilated and input size % dilation != 0
   // NOTE: every warp role has to execute this before using the mask!!
-  template <class ProblemShape, class QKVShape, class Dilation>
+  template <class QKVShape, class Dilation>
   CUTLASS_DEVICE auto correct_qkv_shape(
-      ProblemShape const& problem_shape,
       QKVShape const& qkv_shape, // this is pre-padding, pre-token permute, just
                                  // the original shape of the sequence mode in
                                  // the self attention
@@ -560,13 +559,14 @@ CUTE_HOST_DEVICE bool is_dilated(NADim dilation) {
   }
 }
 
-// Backward only:
+// (backward only)
 template <class NADim>
 CUTE_HOST_DEVICE constexpr auto get_bwd_stride_offset(NADim const& stride) {
   return transform_leaf(
       stride, [&](auto const& s) { return (s - (s / 2) - 1); });
 }
 
+// (forward and backward)
 template <
     bool IsVarlen,
     bool IsBackward,
@@ -664,7 +664,7 @@ CUTE_HOST_DEVICE auto update_params(
 
   if (requires_qkv_fixup) {
     qkv_shape = Mask{}.correct_qkv_shape(
-        problem_shape, qkv_shape, batch_idx, dilation, num_dilation_groups);
+        qkv_shape, batch_idx, dilation, num_dilation_groups);
     qkv_shape_modified = true;
   } else if (is_dilated) {
     qkv_shape = ceil_div(qkv_shape, dilation);
@@ -695,7 +695,5 @@ CUTE_HOST_DEVICE auto update_params(
       is_fully_block_sparse,
       has_padding);
 }
-
-// We reuse VariableLength from FMHA
 
 } // namespace cutlass::fna::collective
