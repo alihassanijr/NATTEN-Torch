@@ -91,25 +91,20 @@ struct CollectiveSoftmax {
       class TiledMmaQK,
       class CountQK,
       class State,
-      class ProblemShape,
       class NADim,
-      class NAParams,
-      class MultiDimTileShape>
+      class NAParams>
   CUTLASS_DEVICE auto step(
       AccQK& acc_qk,
       TiledMmaQK const& tiled_mma_qk,
       CountQK const& count_qk,
       State& state,
-      ProblemShape const& problem_shape,
       bool is_fully_block_sparse,
       bool has_kv_padding,
       NADim const& q_shape,
       NADim const& qkv_shape,
       NAParams const& na_params,
       NADim const& blk_kv_offset,
-      NADim const& kv_diff_tiles,
-      MultiDimTileShape const& multi_dim_tile_shape) {
-    // Fusion{}.before_softmax(acc_qk, count_qk, problem_shape);
+      NADim const& kv_diff_tiles) {
     Tensor acc_qk_mn = make_tensor(
         acc_qk.data(), layout_acc_mn(tiled_mma_qk, acc_qk.layout()));
 
@@ -117,7 +112,6 @@ struct CollectiveSoftmax {
       Fusion{}.apply_mask(
           acc_qk_mn,
           count_qk,
-          multi_dim_tile_shape,
           q_shape,
           qkv_shape,
           na_params,
@@ -127,7 +121,6 @@ struct CollectiveSoftmax {
       Fusion{}.apply_padded_mask(
           acc_qk_mn,
           count_qk,
-          multi_dim_tile_shape,
           qkv_shape,
           na_params,
           blk_kv_offset,
@@ -194,10 +187,8 @@ struct CollectiveSoftmax {
       class State,
       class AccPV,
       class TiledMmaPV,
-      class ProblemShape,
       class NADim,
-      class NAParams,
-      class MultiDimTileShape>
+      class NAParams>
   CUTLASS_DEVICE auto step_interleave_begin(
       AccQK& acc_qk,
       TiledMmaQK const& tiled_mma_qk,
@@ -205,19 +196,13 @@ struct CollectiveSoftmax {
       State& state,
       AccPV& acc_pv,
       TiledMmaPV const& tiled_mma_pv,
-      ProblemShape const& problem_shape,
       bool is_fully_block_sparse,
       bool has_kv_padding,
       NADim const& q_shape,
       NADim const& qkv_shape,
       NAParams const& na_params,
       NADim const& blk_kv_offset,
-      NADim const& kv_diff_tiles,
-      MultiDimTileShape const& multi_dim_tile_shape) {
-    // if constexpr (kUseFusion) {
-    //   Fusion{}.before_softmax(acc_qk, count_qk, problem_shape);
-    // }
-
+      NADim const& kv_diff_tiles) {
     Tensor acc_qk_mn = make_tensor(
         acc_qk.data(), layout_acc_mn(tiled_mma_qk, acc_qk.layout()));
     Tensor acc_pv_mn = make_tensor(
@@ -228,7 +213,6 @@ struct CollectiveSoftmax {
         Fusion{}.apply_mask(
             acc_qk_mn,
             count_qk,
-            multi_dim_tile_shape,
             q_shape,
             qkv_shape,
             na_params,
@@ -238,7 +222,6 @@ struct CollectiveSoftmax {
         Fusion{}.apply_padded_mask(
             acc_qk_mn,
             count_qk,
-            multi_dim_tile_shape,
             qkv_shape,
             na_params,
             blk_kv_offset,
@@ -319,10 +302,8 @@ struct CollectiveSoftmax {
       class State,
       class AccPV,
       class TiledMmaPV,
-      class ProblemShape,
       class NADim,
-      class NAParams,
-      class MultiDimTileShape>
+      class NAParams>
   CUTLASS_DEVICE auto step(
       AccQK& acc_qk,
       TiledMmaQK const& tiled_mma_qk,
@@ -330,19 +311,13 @@ struct CollectiveSoftmax {
       State& state,
       AccPV& acc_pv,
       TiledMmaPV const& tiled_mma_pv,
-      ProblemShape const& problem_shape,
       bool is_fully_block_sparse,
       bool has_kv_padding,
       NADim const& q_shape,
       NADim const& qkv_shape,
       NAParams const& na_params,
       NADim const& blk_kv_offset,
-      NADim const& kv_diff_tiles,
-      MultiDimTileShape const& multi_dim_tile_shape) {
-    // if constexpr (kUseFusion) {
-    //   Fusion{}.before_softmax(acc_qk, count_qk, problem_shape);
-    // }
-
+      NADim const& kv_diff_tiles) {
     Tensor acc_qk_mn = make_tensor(
         acc_qk.data(), layout_acc_mn(tiled_mma_qk, acc_qk.layout()));
     Tensor acc_pv_mn = make_tensor(
@@ -353,7 +328,6 @@ struct CollectiveSoftmax {
         Fusion{}.apply_mask(
             acc_qk_mn,
             count_qk,
-            multi_dim_tile_shape,
             q_shape,
             qkv_shape,
             na_params,
@@ -363,7 +337,6 @@ struct CollectiveSoftmax {
         Fusion{}.apply_padded_mask(
             acc_qk_mn,
             count_qk,
-            multi_dim_tile_shape,
             qkv_shape,
             na_params,
             blk_kv_offset,
