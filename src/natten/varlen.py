@@ -280,7 +280,8 @@ def neighborhood_attention_varlen(
     )
 
     if metadata is not None:
-        assert backend is None or backend == metadata["backend"]
+        assert "backend" in metadata
+        backend = metadata["backend"]
     else:
         if (
             token_layout_list is None
