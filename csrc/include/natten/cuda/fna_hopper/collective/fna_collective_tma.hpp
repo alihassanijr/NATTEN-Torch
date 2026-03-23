@@ -52,17 +52,18 @@ template <
     class NADim,
     class QTileShape,
     class KVTileShape,
+    bool IsVarlen,
     typename Element_,
     typename ElementAccumulator_,
     typename TileShape_, // BlockQO, BlockKV, BlockHead
     class Fusion,
     class... Options>
 struct FnaMainloopTmaSm90 {
+  using BatchMap = cute::tuple<int32_t, int32_t>;
+
   using Element = Element_;
   using ElementAccumulator = ElementAccumulator_;
   using TileShape = TileShape_;
-
-  using MultiDimTileShape = cute::tuple<QTileShape, KVTileShape>;
 
   static_assert(
       size(QTileShape{}) == get<0>(TileShape{}),
@@ -172,13 +173,23 @@ struct FnaMainloopTmaSm90 {
     NADim window_size;
     NADim stride;
     NADim dilation;
+
+    // varlen (varsized)
+    NADim* token_layout_ptr;
+    BatchMap* batch_map_ptr;
+
+    // var-param
+    NADim* window_sizes_ptr;
+    NADim* strides_ptr;
+    NADim* dilations_ptr;
   };
 
   using TMA_Q = typename CollectiveMmaQK::Params::TMA_A;
   using TMA_K = typename CollectiveMmaQK::Params::TMA_B;
   using TMA_V = typename CollectiveMmaPV::Params::TMA_B;
 
-  struct Params {
+  struct ParamsStandard {
+    using NADimType = NADim;
     TMA_Q tma_load_q;
     TMA_K tma_load_k;
     TMA_V tma_load_v;
@@ -200,6 +211,33 @@ struct FnaMainloopTmaSm90 {
     bool is_dilated;
     int num_dilation_groups;
   };
+
+  struct ParamsVarlen {
+    using NADimType = NADim;
+
+    TMA_Q tma_load_q;
+    TMA_K tma_load_k;
+    TMA_V tma_load_v;
+
+    float scale_softmax;
+    float scale_softmax_log2;
+    float rp_dropout;
+
+    // FNA params
+    cute::tuple<NADim, NADim, NADim, NADim>
+        na_params; // win, win_left, win_right, stride
+    NADim dilation;
+    int num_dilation_groups;
+
+    NADim* token_layout_ptr;
+    BatchMap* batch_map_ptr;
+
+    NADim* window_sizes_ptr;
+    NADim* strides_ptr;
+    NADim* dilations_ptr;
+  };
+
+  using Params = cute::conditional_t<IsVarlen, ParamsVarlen, ParamsStandard>;
 
   using LoadQ = cutlass::fna::collective::CollectiveLoadTma<
       cutlass::fna::collective::LoadKind::kQ,
@@ -233,19 +271,34 @@ struct FnaMainloopTmaSm90 {
   static bool can_implement(
       ProblemShape const& problem_size,
       Arguments const& args) {
-    return (get<4>(problem_size) <= get<2>(TileShape{})) &&
-        ((get<4>(problem_size) % Alignment) == 0) &&
-        ((get<2>(problem_size) % Alignment) == 0) &&
-        // FNA
-        evenly_divides(args.q_shape, QTileShape{}) &&
-        evenly_divides(args.kv_shape, KVTileShape{}) &&
-        evenly_divides(
-               size<0>(problem_size),
-               size(args.dilation)) && // dilation groups are
-                                       // folded into batch
-        tuple_leq(args.window_size, args.qkv_shape) &&
-        // TODO: check window size * dilation <= qkv shape
-        tuple_leq(args.stride, args.window_size);
+    if constexpr (IsVarlen) {
+      // variable-dilations needs the extra batch map tensor
+      if (args.dilations_ptr != nullptr && args.batch_map_ptr == nullptr) {
+        return false;
+      }
+
+      // NA parameter verification is done during metadata construction
+      // (host-side, ahead of time)
+      if (args.strides_ptr == nullptr && args.window_sizes_ptr == nullptr) {
+        return tuple_leq(args.stride, args.window_size);
+      }
+
+      return args.token_layout_ptr != nullptr;
+    } else {
+      return (get<4>(problem_size) <= get<2>(TileShape{})) &&
+          ((get<4>(problem_size) % Alignment) == 0) &&
+          ((get<2>(problem_size) % Alignment) == 0) &&
+          // FNA
+          evenly_divides(args.q_shape, QTileShape{}) &&
+          evenly_divides(args.kv_shape, KVTileShape{}) &&
+          evenly_divides(
+                 size<0>(problem_size),
+                 size(args.dilation)) && // dilation groups are
+                                         // folded into batch
+          tuple_leq(args.window_size, args.qkv_shape) &&
+          // TODO: check window size * dilation <= qkv shape
+          tuple_leq(args.stride, args.window_size);
+    }
   }
 
   template <class ProblemShape>
@@ -253,11 +306,11 @@ struct FnaMainloopTmaSm90 {
       ProblemShape const& problem_size,
       Arguments const& args,
       void* workspace) {
-    auto problem_shape_qk = make_shape(
+    auto problem_shape_qk = apply_variable_length_scheduler(make_shape(
         get<2>(problem_size),
         get<3>(problem_size),
         get<4>(problem_size),
-        make_shape(get<0>(problem_size), get<1>(problem_size)));
+        make_shape(get<0>(problem_size), get<1>(problem_size))));
     auto params_qk = CollectiveMmaQK::to_underlying_arguments(
         problem_shape_qk,
         typename CollectiveMmaQK::Arguments{
@@ -288,30 +341,50 @@ struct FnaMainloopTmaSm90 {
     auto window_left = get_window_left(args.window_size);
     auto window_right = get_window_right(args.window_size);
 
-    bool requires_qkv_fixup = not evenly_divides(args.qkv_shape, args.dilation);
-
-    return Params{
-        params_qk.tma_load_a,
-        params_qk.tma_load_b,
-        params_pv.tma_load_b,
-        scale_softmax,
-        log2_e * scale_softmax,
-        1.0f,
-        args.qkv_shape,
-        args.q_shape,
-        args.kv_shape,
-        make_tuple(args.window_size, window_left, window_right, args.stride),
-        fully_block_sparse<typename Fusion::Causal>(
-            args.qkv_shape,
-            args.window_size,
-            args.stride,
-            QTileShape{},
-            KVTileShape{}),
-        /* has_kv_padding */ not evenly_divides(args.qkv_shape, KVTileShape{}),
-        args.dilation,
-        requires_qkv_fixup,
-        is_dilated(args.dilation),
-        size(args.dilation)};
+    if constexpr (not IsVarlen) {
+      return ParamsStandard{
+          params_qk.tma_load_a,
+          params_qk.tma_load_b,
+          params_pv.tma_load_b,
+          scale_softmax,
+          log2_e * scale_softmax,
+          1.0f,
+          args.qkv_shape,
+          args.q_shape,
+          args.kv_shape,
+          make_tuple(args.window_size, window_left, window_right, args.stride),
+          fully_block_sparse<typename Fusion::Causal>(
+              args.qkv_shape,
+              args.window_size,
+              args.stride,
+              QTileShape{},
+              KVTileShape{}),
+          /* has_kv_padding */
+          not evenly_divides(args.qkv_shape, KVTileShape{}),
+          args.dilation,
+          /* requires_qkv_fixup */
+          not evenly_divides(args.qkv_shape, args.dilation),
+          is_dilated(args.dilation),
+          size(args.dilation)};
+    } else {
+      return ParamsVarlen{
+          params_qk.tma_load_a,
+          params_qk.tma_load_b,
+          params_pv.tma_load_b,
+          scale_softmax,
+          log2_e * scale_softmax,
+          1.0f,
+          make_tuple(args.window_size, window_left, window_right, args.stride),
+          /* dilation */ args.dilation,
+          /* num_dilation_groups */ size(args.dilation),
+          args.token_layout_ptr,
+          args.batch_map_ptr,
+          // var-param
+          args.window_sizes_ptr,
+          args.strides_ptr,
+          args.dilations_ptr,
+      };
+    }
   }
 
   CUTLASS_DEVICE
@@ -340,9 +413,7 @@ struct FnaMainloopTmaSm90 {
     PipelineState smem_pipe_release = smem_pipe_read;
     [[maybe_unused]] PipelineStateQ smem_pipe_release_q = smem_pipe_read_q;
 
-    // int fusion_tile_count =
-    //     Fusion{}.get_trip_count(blk_coord, TileShape{}, problem_size);
-
+#if 0
     auto qkv_shape = params.qkv_shape;
     bool is_fully_block_sparse = params.is_fully_block_sparse;
     bool has_kv_padding = params.has_kv_padding;
@@ -369,19 +440,26 @@ struct FnaMainloopTmaSm90 {
           KVTileShape{});
       has_kv_padding = not evenly_divides(qkv_shape, KVTileShape{});
     }
+#else
+    auto
+        [qkv_shape,
+         q_shape,
+         kv_shape,
+         na_params,
+         is_fully_block_sparse,
+         has_kv_padding] =
+            update_params<IsVarlen, /* IsBackward = */ false, Fusion>(
+                params, blk_coord, problem_size);
+#endif
 
-    auto [kv_start, num_tiles] = Fusion{}.get_trip_count(
-        blk_coord,
-        MultiDimTileShape{},
-        params.q_shape,
-        qkv_shape,
-        params.na_params);
+    auto [kv_start, num_tiles] =
+        Fusion{}.get_trip_count(blk_coord, q_shape, qkv_shape, na_params);
 
     int fusion_tile_count = size(num_tiles);
 
     auto kv_start_tile = ceil_div(kv_start, KVTileShape{});
 
-    auto kv_tiled = ceil_div(params.kv_shape, KVTileShape{});
+    auto kv_tiled = ceil_div(kv_shape, KVTileShape{});
     auto ctr = make_identity_tensor(num_tiles);
     auto ctr_offset = domain_offset(kv_start_tile, ctr);
 
@@ -541,15 +619,13 @@ struct FnaMainloopTmaSm90 {
           tiled_mma_qk,
           tPcP,
           softmax_state,
-          problem_size,
           is_fully_block_sparse,
           has_kv_padding,
-          params.q_shape,
+          q_shape,
           qkv_shape,
-          params.na_params,
+          na_params,
           kv_start,
-          num_tiles,
-          MultiDimTileShape{});
+          num_tiles);
 
       Tensor acc_qk_fixed =
           make_fragment_like<Element>(convert_c_layout_to_a_layout(
@@ -633,15 +709,13 @@ struct FnaMainloopTmaSm90 {
           softmax_state,
           acc_pv,
           tiled_mma_pv,
-          problem_size,
           is_fully_block_sparse,
           has_kv_padding,
-          params.q_shape,
+          q_shape,
           qkv_shape,
-          params.na_params,
+          na_params,
           kv_start,
-          num_tiles,
-          MultiDimTileShape{});
+          num_tiles);
 
       pipeline.consumer_release(smem_pipe_release);
 
@@ -747,15 +821,13 @@ struct FnaMainloopTmaSm90 {
           softmax_state,
           acc_pv,
           tiled_mma_pv,
-          problem_size,
           is_fully_block_sparse,
           has_kv_padding,
-          params.q_shape,
+          q_shape,
           qkv_shape,
-          params.na_params,
+          na_params,
           kv_start,
-          num_tiles,
-          MultiDimTileShape{});
+          num_tiles);
 
       pipeline.consumer_release(smem_pipe_release);
 

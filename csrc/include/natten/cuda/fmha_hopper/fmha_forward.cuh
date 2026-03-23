@@ -29,6 +29,7 @@
 #include "cutlass/kernel_hardware_info.h"
 
 #include "natten/cuda/fmha_hopper/collective/fmha_fusion.hpp"
+#include "natten/cuda/fmha_hopper/collective/fmha_varlen.hpp"
 #include "natten/cuda/fmha_hopper/device/fmha_sm90.hpp"
 #include "natten/cuda/fmha_hopper/kernel/fmha_kernel_builder.hpp"
 
@@ -126,15 +127,14 @@ struct KernelForward {
       void* ptr_cumulative_seqlen_KV,
       // init/launch params
       int device_id) {
-    auto dim_aligned = cutlass::round_up(dim, 8); // alignment
-
-    auto problem_shape_regular = ProblemShapeRegular{
+    auto problem_shape_regular = cute::make_tuple(
         batch,
         heads,
         seqlen_Q,
         seqlen_KV,
-        dim_aligned,
-    };
+        // head dim is always either 32, 64, 128, or 256 in natten, but it
+        // should always meet the 128-bit alignment constraint
+        dim);
 
     ProblemShapeType problem_shape_launch;
     decltype(problem_shape_regular) problem_shape_memory;
@@ -161,31 +161,27 @@ struct KernelForward {
     }
 
     int B = size<0>(problem_shape_memory);
-    int H = size<1>(problem_shape_memory);
-    int SQ = size<2>(problem_shape_memory);
-    int SK = size<3>(problem_shape_memory);
-    int D = size<4>(problem_shape_memory);
 
     // heads last profile, with torch's "contiguous layout"
     // shape: (batch, heads, seqlen, dim)
     // stride: (dim*heads*seqlen, dim*heads, dim, 1)
     auto stride_Q = make_stride(
-        heads * dim_aligned,
+        heads * dim,
         _1{},
         make_stride(
             B == 1 ? 0
-                   : static_cast<int64_t>(heads * dim_aligned) *
+                   : static_cast<int64_t>(heads * dim) *
                     static_cast<int64_t>(seqlen_Q),
-            dim_aligned));
+            dim));
     auto stride_O = stride_Q;
     auto stride_K = make_stride(
-        heads * dim_aligned,
+        heads * dim,
         _1{},
         make_stride(
             B == 1 ? 0
-                   : static_cast<int64_t>(heads * dim_aligned) *
+                   : static_cast<int64_t>(heads * dim) *
                     static_cast<int64_t>(seqlen_KV),
-            dim_aligned));
+            dim));
     auto stride_V = stride_K;
     auto stride_LSE = make_stride(
         heads,

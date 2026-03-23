@@ -28,10 +28,19 @@ from torch import Tensor
 
 from natten._environment import _IS_TORCH_COMPILE_SUPPORTED, _TORCH_VERSION
 from natten._libnatten import HAS_LIBNATTEN
+from natten.backends.configs.cutlass_blackwell import (
+    SUPPORTED_DTYPES_BWD as BLACKWELL_FMHA_SUPPORTED_DTYPES_BWD,
+    SUPPORTED_DTYPES_FWD as BLACKWELL_FMHA_SUPPORTED_DTYPES_FWD,
+    SUPPORTED_HEAD_DIMS as BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS,
+)
+from natten.backends.configs.cutlass_hopper import (
+    SUPPORTED_DTYPES as HOPPER_FMHA_SUPPORTED_DTYPES,
+    SUPPORTED_HEAD_DIMS_BWD as HOPPER_FMHA_SUPPORTED_HEAD_DIMS_BWD,
+    SUPPORTED_HEAD_DIMS_FWD as HOPPER_FMHA_SUPPORTED_HEAD_DIMS_FWD,
+)
 from natten.context import is_flex_compile_allowed, is_flex_compile_backprop_allowed
 from natten.utils.checks import fmha_tensor_checks, log_or_raise_error, na_tensor_checks
 from natten.utils.device import get_device_cc, is_cpu, is_cuda, is_rocm
-from natten.utils.dtype import is_fp8
 
 ### Blackwell FMHA/FNA
 
@@ -100,30 +109,25 @@ def can_run_cutlass_blackwell_fmha(
         )
         return False
 
-    if query.dtype not in [
-        torch.float16,
-        torch.bfloat16,
-        torch.float8_e4m3fn,
-        torch.float8_e5m2,
-    ]:
+    if head_dim not in BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS:
         target_fn(
-            "Can't run Blackwell FMHA; it only supports FP16, BF16, FP8-E4M3 and FP8-E5M2.",
-            exception=ValueError,
-        )
-        return False
-
-    if query.requires_grad and is_fp8(query.dtype):
-        target_fn(
-            "Blackwell FMHA does not support FP8 backward pass, but "
-            f"got {query.requires_grad=}, {query.dtype=}.",
-            exception=ValueError,
-        )
-        return False
-
-    if head_dim not in [32, 64, 128]:
-        target_fn(
-            "Can't run Blackwell FMHA; it only supports head dims 32, 64, and 128 for now.",
+            f"Can't run Blackwell FMHA; it only supports these head dims for now: {BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS}.",
             exception=NotImplementedError,
+        )
+        return False
+
+    if query.dtype not in BLACKWELL_FMHA_SUPPORTED_DTYPES_FWD:
+        target_fn(
+            f"Can't run Blackwell FMHA; supported dtypes (forward pass): {BLACKWELL_FMHA_SUPPORTED_DTYPES_FWD}.",
+            exception=ValueError,
+        )
+        return False
+
+    if query.requires_grad and query.dtype not in BLACKWELL_FMHA_SUPPORTED_DTYPES_BWD:
+        target_fn(
+            f"Blackwell FMHA does not support {query.dtype=} in the backward pass, but "
+            f"got {query.requires_grad=}. Supported dtypes: {BLACKWELL_FMHA_SUPPORTED_DTYPES_BWD}.",
+            exception=ValueError,
         )
         return False
 
@@ -190,29 +194,98 @@ def can_run_cutlass_blackwell_fna(
         )
         return False
 
-    if query.dtype not in [
-        torch.float16,
-        torch.bfloat16,
-        torch.float8_e4m3fn,
-        torch.float8_e5m2,
-    ]:
+    if query.dtype not in BLACKWELL_FMHA_SUPPORTED_DTYPES_FWD:
         target_fn(
-            "Can't run Blackwell FNA; it only supports FP16, BF16, FP8-E4M3 and FP8-E5M2.",
+            f"Can't run Blackwell FNA; supported dtypes (forward pass): {BLACKWELL_FMHA_SUPPORTED_DTYPES_FWD}.",
             exception=ValueError,
         )
         return False
 
-    if query.requires_grad and is_fp8(query.dtype):
+    if query.requires_grad and query.dtype not in BLACKWELL_FMHA_SUPPORTED_DTYPES_BWD:
         target_fn(
-            "Blackwell FNA does not support FP8 backward pass, but "
-            f"got {query.requires_grad=}, {query.dtype=}.",
+            f"Blackwell FNA does not support {query.dtype=} in the backward pass, but "
+            f"got {query.requires_grad=}. Supported dtypes: {BLACKWELL_FMHA_SUPPORTED_DTYPES_BWD}.",
             exception=ValueError,
         )
         return False
 
-    if head_dim not in [32, 64, 128]:
+    if head_dim not in BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS:
         target_fn(
-            "Can't run Blackwell FNA; it only supports head dims 32, 64, and 128 for now.",
+            f"Can't run Blackwell FNA; it only supports these head dims for now: {BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS}.",
+            exception=NotImplementedError,
+        )
+        return False
+
+    return True
+
+
+def can_run_cutlass_blackwell_fna_varlen(
+    na_dim: int,
+    head_dim: int,
+    head_dim_v: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    raise_error: bool = False,
+) -> bool:
+    target_fn = functools.partial(log_or_raise_error, raise_error=raise_error)
+
+    if na_dim not in [1, 2, 3]:
+        target_fn(
+            "Varlen Blackwell FNA only supports 1, 2, and 3-D token layouts, "
+            f"got {na_dim=}.",
+            exception=ValueError,
+        )
+        return False
+
+    if not HAS_LIBNATTEN:
+        target_fn(
+            "Can't run Varlen Blackwell FNA; NATTEN was not built with libnatten."
+        )
+        return False
+
+    device_cc = get_device_cc(device)
+
+    if device_cc not in [100, 103]:
+        target_fn(
+            "Can't run Varlen Blackwell FNA; got CUDA device with "
+            f"compute capability {device_cc}, expected 100 or 103."
+        )
+        return False
+
+    if requires_grad and torch.are_deterministic_algorithms_enabled():
+        target_fn(
+            "Can't run Varlen Blackwell FMHA; its backprop does not have a deterministic mode, but "
+            "PyTorch's deterministic mode was enabled.",
+            exception=NotImplementedError,
+        )
+        return False
+
+    if head_dim != head_dim_v:
+        target_fn(
+            "Can't run Varlen Blackwell FNA; it does not support different head dims for QK and V.",
+            exception=ValueError,
+        )
+        return False
+
+    if dtype not in BLACKWELL_FMHA_SUPPORTED_DTYPES_FWD:
+        target_fn(
+            f"Can't run Varlen Blackwell FNA; supported dtypes (forward pass): {BLACKWELL_FMHA_SUPPORTED_DTYPES_FWD}.",
+            exception=ValueError,
+        )
+        return False
+
+    if requires_grad and dtype not in BLACKWELL_FMHA_SUPPORTED_DTYPES_BWD:
+        target_fn(
+            f"Varlen Blackwell FNA does not support {dtype=} in the backward pass, but "
+            f"got {requires_grad=}. Supported dtypes: {BLACKWELL_FMHA_SUPPORTED_DTYPES_BWD}.",
+            exception=ValueError,
+        )
+        return False
+
+    if head_dim not in BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS:
+        target_fn(
+            f"Can't run Varlen Blackwell FNA; it only supports these head dims for now: {BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS}.",
             exception=NotImplementedError,
         )
         return False
@@ -268,6 +341,14 @@ def can_run_cutlass_hopper_fmha(
         )
         return False
 
+    if query.requires_grad and torch.are_deterministic_algorithms_enabled():
+        target_fn(
+            "Can't run Hopper FMHA; its backprop does not have a deterministic mode, but "
+            "PyTorch's deterministic mode was enabled.",
+            exception=NotImplementedError,
+        )
+        return False
+
     head_dim = query.shape[-1]
     head_dim_v = value.shape[-1]
 
@@ -279,33 +360,27 @@ def can_run_cutlass_hopper_fmha(
         )
         return False
 
-    if query.requires_grad and head_dim not in [32, 64, 128]:
+    if head_dim not in HOPPER_FMHA_SUPPORTED_HEAD_DIMS_FWD:
         target_fn(
-            f"Can't run Hopper FMHA; it does not support backpropagation for {head_dim=} yet; "
-            "only head dims 32, 64, and 128 are allowed.",
+            "Can't run Hopper FMHA; it only supports these head dims in forward pass: "
+            f"{HOPPER_FMHA_SUPPORTED_HEAD_DIMS_FWD}, got {head_dim=}.",
             exception=NotImplementedError,
         )
         return False
 
-    if query.requires_grad and torch.are_deterministic_algorithms_enabled():
+    if query.requires_grad and head_dim not in HOPPER_FMHA_SUPPORTED_HEAD_DIMS_BWD:
         target_fn(
-            "Can't run Hopper FMHA; its backprop does not have a deterministic mode, but "
-            "PyTorch's deterministic mode was enabled.",
+            "Can't run Hopper FMHA; it only supports these head dims in backward pass: ",
+            f"{HOPPER_FMHA_SUPPORTED_HEAD_DIMS_BWD}, got {query.requires_grad=}, {head_dim=}.",
             exception=NotImplementedError,
         )
         return False
 
-    if query.dtype not in [torch.float16, torch.bfloat16]:
+    if query.dtype not in HOPPER_FMHA_SUPPORTED_DTYPES:
         target_fn(
-            "Can't run Hopper FMHA; it only supports FP16 and BF16 for now.",
+            "Can't run Hopper FMHA; it only supports these dtypes: "
+            f"{HOPPER_FMHA_SUPPORTED_DTYPES}, got {query.dtype=}.",
             exception=ValueError,
-        )
-        return False
-
-    if head_dim not in [32, 64, 128, 256]:
-        target_fn(
-            "Can't run Hopper FMHA; it only supports head dims 32, 64, 128, and 256 for now.",
-            exception=NotImplementedError,
         )
         return False
 
@@ -353,6 +428,14 @@ def can_run_cutlass_hopper_fna(
         )
         return False
 
+    if query.requires_grad and torch.are_deterministic_algorithms_enabled():
+        target_fn(
+            "Can't run Hopper FMHA; its backprop does not have a deterministic mode, but "
+            "PyTorch's deterministic mode was enabled.",
+            exception=NotImplementedError,
+        )
+        return False
+
     head_dim = query.shape[-1]
     head_dim_v = value.shape[-1]
 
@@ -364,33 +447,102 @@ def can_run_cutlass_hopper_fna(
         )
         return False
 
-    if query.requires_grad and head_dim not in [32, 64, 128]:
+    if head_dim not in HOPPER_FMHA_SUPPORTED_HEAD_DIMS_FWD:
         target_fn(
-            f"Can't run Hopper FNA; it does not support backpropagation for {head_dim=} yet; "
-            "only head dims 32, 64, and 128 are allowed.",
+            "Can't run Hopper FNA; it only supports these head dims in forward pass: "
+            f"{HOPPER_FMHA_SUPPORTED_HEAD_DIMS_FWD}, got {head_dim=}.",
             exception=NotImplementedError,
         )
         return False
 
-    if query.requires_grad and torch.are_deterministic_algorithms_enabled():
+    if query.requires_grad and head_dim not in HOPPER_FMHA_SUPPORTED_HEAD_DIMS_BWD:
         target_fn(
-            "Can't run Hopper FNA; its backprop does not have a deterministic mode, but "
+            "Can't run Hopper FNA; it only supports these head dims in backward pass: "
+            f"{HOPPER_FMHA_SUPPORTED_HEAD_DIMS_BWD}, got {query.requires_grad=}, {head_dim=}.",
+            exception=NotImplementedError,
+        )
+        return False
+
+    if query.dtype not in HOPPER_FMHA_SUPPORTED_DTYPES:
+        target_fn(
+            "Can't run Hopper FNA; it only supports these dtypes: "
+            f"{HOPPER_FMHA_SUPPORTED_DTYPES}, got {query.dtype=}.",
+            exception=ValueError,
+        )
+        return False
+
+    return True
+
+
+def can_run_cutlass_hopper_fna_varlen(
+    na_dim: int,
+    head_dim: int,
+    head_dim_v: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    requires_grad: bool,
+    raise_error: bool = False,
+) -> bool:
+    target_fn = functools.partial(log_or_raise_error, raise_error=raise_error)
+
+    if na_dim not in [1, 2, 3]:
+        target_fn(
+            "Varlen Hopper FNA only supports 1, 2, and 3-D token layouts, "
+            f"got {na_dim=}.",
+            exception=ValueError,
+        )
+        return False
+
+    if not HAS_LIBNATTEN:
+        target_fn("Can't run Varlen Hopper FNA; NATTEN was not built with libnatten.")
+        return False
+
+    device_cc = get_device_cc(device)
+
+    if device_cc != 90:
+        target_fn(
+            "Can't run Varlen Hopper FNA; tensor was on CUDA device with "
+            f"compute capability {device_cc}, expected 90."
+        )
+        return False
+
+    if requires_grad and torch.are_deterministic_algorithms_enabled():
+        target_fn(
+            "Can't run Varlen Hopper FNA; its backprop does not have a deterministic mode, but "
             "PyTorch's deterministic mode was enabled.",
             exception=NotImplementedError,
         )
         return False
 
-    if query.dtype not in [torch.float16, torch.bfloat16]:
+    if head_dim != head_dim_v:
         target_fn(
-            "Can't run Hopper FNA; it only supports FP16 and BF16 for now.",
+            "Can't run Varlen Hopper FNA; it does not support different head dims for QK and V, "
+            f"got {head_dim=}, {head_dim_v=}.",
             exception=ValueError,
         )
         return False
 
-    if head_dim not in [32, 64, 128, 256]:
+    if head_dim not in HOPPER_FMHA_SUPPORTED_HEAD_DIMS_FWD:
         target_fn(
-            "Can't run Hopper FNA; it only supports head dims 32, 64, 128, and 256 for now.",
+            "Can't run Varlen Hopper FNA; it only supports these head dims in forward pass: "
+            f"{HOPPER_FMHA_SUPPORTED_HEAD_DIMS_FWD}, got {head_dim=}.",
             exception=NotImplementedError,
+        )
+        return False
+
+    if requires_grad and head_dim not in HOPPER_FMHA_SUPPORTED_HEAD_DIMS_BWD:
+        target_fn(
+            "Can't run Varlen Hopper FNA; it only supports these head dims in backward pass: "
+            f"{HOPPER_FMHA_SUPPORTED_HEAD_DIMS_BWD}, got {requires_grad=}, {head_dim=}.",
+            exception=NotImplementedError,
+        )
+        return False
+
+    if dtype not in HOPPER_FMHA_SUPPORTED_DTYPES:
+        target_fn(
+            "Can't run Varlen Hopper FNA; it only supports these dtypes: "
+            f"{HOPPER_FMHA_SUPPORTED_DTYPES}, got {dtype=}.",
+            exception=ValueError,
         )
         return False
 
