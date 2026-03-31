@@ -22,6 +22,10 @@ List of terms and abbreviations used throughout the projects.
         2. Block-sparse scheduling (made much simpler by #1)
         3. NA fine-grained mask (numerical correctness)
 
+* **TokPerm**: token permute / token permutation is a memory operation that performs
+    multi-dimensional tiling (#1 in FNA) outside the main compute kernel, in order to simplify the
+    design, improve development speed, and in some cases even improve the final performance.
+
 * **Blackwell DC-class**": Blackwell Data Center class GPU: either the B200/GB200 (SM100) or
     B300/GB300 (SM103). Kernels using PTX features for this specific family is not forward
     compatible.

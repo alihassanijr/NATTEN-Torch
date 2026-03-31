@@ -28,3 +28,9 @@ Refer to [.agents/CODEORG.md](.agents/CODEORG.md) for code organization.
 
 Refer to [.agents/CUTLASS.md](.agents/CUTLASS.md) for information on CUTLASS.
 
+Refer to [.agents/BUILD.md](.agents/BUILD.md) for building from source.
+
+Refer to [.agents/TEST.md](.agents/TEST.md) for running tests.
+
+Refer to [.agents/FORMAT.md](.agents/FORMAT.md) for formatting and linting.
+
