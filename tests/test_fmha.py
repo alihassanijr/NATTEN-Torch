@@ -72,7 +72,7 @@ def _reset_everything():
     torch.manual_seed(42)
     torch.cuda.empty_cache()
 
-    # Hopper and Blackwell FMHA bwd don't have deterministic option.
+    # Hopper FMHA bwd doesn't have deterministic option.
     torch.use_deterministic_algorithms(False)
 
 
@@ -1083,6 +1083,108 @@ class FMHABackendTest(unittest.TestCase):
                         seqlen_kv=seqlen_kv,
                         is_causal=is_causal,
                         backend="blackwell-fmha",
+                    )
+
+    @skip_if_libnatten_is_not_supported()
+    @skip_if_blackwell_kernels_not_supported()
+    def test_cutlass_blackwell_fmha_determinism(self):
+        torch.set_default_device("cuda")
+
+        problem_sizes = [
+            (1, 1, 1, 128, 128, 128),
+            (1, 4, 2, 128, 128, 128),
+            (2, 2, 1, 64, 128, 128),
+            (1, 1, 1, 32, 128, 4096),
+            (1, 1, 1, 128, 3584, 381),
+            (2, 4, 2, 32, 128, 237),
+        ]
+
+        DTYPES = [torch.float16, torch.bfloat16]
+
+        for dtype in DTYPES:
+            for (
+                batch,
+                heads_q,
+                heads_kv,
+                head_dim,
+                seqlen_q,
+                seqlen_kv,
+            ) in problem_sizes:
+                for is_causal in [False, True]:
+                    dummy = torch.empty(
+                        (batch, seqlen_kv, heads_q, head_dim),
+                        device="cuda",
+                        dtype=dtype,
+                    )
+                    forward_configs = get_all_blackwell_fmha_forward_configs(
+                        dummy
+                    )
+                    backward_configs = (
+                        get_all_blackwell_fmha_backward_configs(dummy)
+                    )
+                    q_tile_size, kv_tile_size = forward_configs[0]
+                    backward_q_tile_size, backward_kv_tile_size = (
+                        backward_configs[0]
+                    )
+
+                    with torch.no_grad():
+                        q = torch.randn(
+                            (batch, seqlen_q, heads_q, head_dim),
+                            device="cuda",
+                            dtype=dtype,
+                        )
+                        k = torch.randn(
+                            (batch, seqlen_kv, heads_kv, head_dim),
+                            device="cuda",
+                            dtype=dtype,
+                        )
+                        v = torch.randn(
+                            (batch, seqlen_kv, heads_kv, head_dim),
+                            device="cuda",
+                            dtype=dtype,
+                        )
+                        d_out = torch.randn(
+                            (batch, seqlen_q, heads_q, head_dim),
+                            device="cuda",
+                            dtype=dtype,
+                        )
+
+                    outs, dqs, dks, dvs = [], [], [], []
+                    torch.use_deterministic_algorithms(True)
+                    for _ in range(2):
+                        q_ = q.clone().requires_grad_(True)
+                        k_ = k.clone().requires_grad_(True)
+                        v_ = v.clone().requires_grad_(True)
+
+                        out_ = attention(
+                            q_,
+                            k_,
+                            v_,
+                            is_causal=is_causal,
+                            backend="blackwell-fmha",
+                            q_tile_size=q_tile_size,
+                            kv_tile_size=kv_tile_size,
+                            backward_q_tile_size=backward_q_tile_size,
+                            backward_kv_tile_size=backward_kv_tile_size,
+                        )
+                        out_.backward(d_out)
+                        outs.append(out_.data.clone())
+                        dqs.append(q_.grad.clone())
+                        dks.append(k_.grad.clone())
+                        dvs.append(v_.grad.clone())
+                    torch.use_deterministic_algorithms(False)
+
+                    torch.testing.assert_close(
+                        outs[0], outs[1], atol=1e-6, rtol=0
+                    )
+                    torch.testing.assert_close(
+                        dqs[0], dqs[1], atol=1e-6, rtol=0
+                    )
+                    torch.testing.assert_close(
+                        dks[0], dks[1], atol=1e-6, rtol=0
+                    )
+                    torch.testing.assert_close(
+                        dvs[0], dvs[1], atol=1e-6, rtol=0
                     )
 
     @skip_if_not_running_extended_tests()
