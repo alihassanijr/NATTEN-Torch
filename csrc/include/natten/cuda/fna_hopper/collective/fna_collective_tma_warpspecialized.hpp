@@ -431,18 +431,6 @@ struct FnaMainloopTmaWarpSpecializedSm90 {
       SharedStorage& storage,
       LoadWarpBarrier& load_warp_barrier,
       bool do_barrier) {
-#if 0
-    auto qkv_shape = params.qkv_shape;
-    if (params.requires_qkv_fixup) {
-      qkv_shape = Fusion{}.correct_qkv_shape(
-          params.qkv_shape,
-          blk_coord,
-          params.dilation,
-          params.num_dilation_groups);
-    } else if (params.is_dilated) {
-      qkv_shape = ceil_div(params.qkv_shape, params.dilation);
-    }
-#else
     auto
         [qkv_shape,
          q_shape,
@@ -452,7 +440,6 @@ struct FnaMainloopTmaWarpSpecializedSm90 {
          has_kv_padding] =
             update_params<IsVarlen, /* IsBackward = */ false, Fusion>(
                 params, blk_coord, problem_size);
-#endif
 
     auto [kv_start, num_tiles] =
         Fusion{}.get_trip_count(blk_coord, q_shape, qkv_shape, na_params);
@@ -684,34 +671,6 @@ struct FnaMainloopTmaWarpSpecializedSm90 {
 
     int k_tile_count = 0;
 
-#if 0
-    auto qkv_shape = params.qkv_shape;
-    bool is_fully_block_sparse = params.is_fully_block_sparse;
-    bool has_kv_padding = params.has_kv_padding;
-    if (params.requires_qkv_fixup) {
-      qkv_shape = Fusion{}.correct_qkv_shape(
-          params.qkv_shape,
-          blk_coord,
-          params.dilation,
-          params.num_dilation_groups);
-      is_fully_block_sparse = fully_block_sparse<typename Fusion::Causal>(
-          qkv_shape,
-          get<0>(params.na_params),
-          get<3>(params.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_kv_padding = not evenly_divides(qkv_shape, KVTileShape{});
-    } else if (params.is_dilated) {
-      qkv_shape = ceil_div(params.qkv_shape, params.dilation);
-      is_fully_block_sparse = fully_block_sparse<typename Fusion::Causal>(
-          qkv_shape,
-          get<0>(params.na_params),
-          get<3>(params.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_kv_padding = not evenly_divides(qkv_shape, KVTileShape{});
-    }
-#else
     auto
         [qkv_shape,
          q_shape,
@@ -721,7 +680,6 @@ struct FnaMainloopTmaWarpSpecializedSm90 {
          has_kv_padding] =
             update_params<IsVarlen, /* IsBackward = */ false, Fusion>(
                 params, blk_coord, problem_size);
-#endif
 
     auto [kv_start, num_tiles] =
         Fusion{}.get_trip_count(blk_coord, q_shape, qkv_shape, na_params);
