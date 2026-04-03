@@ -68,6 +68,40 @@ template <
     class... Options>
 class FmhaBwdSm90 {
  public:
+  static constexpr bool IsVarlen =
+      cutlass::fmha::collective::is_problem_shape_variable_length(
+          ProblemShape{});
+
+  using OperationSumOdO = cutlass::fmha::device::Sm90DeviceKernel<
+      cutlass::fmha::kernel::
+          FmhaKernelBwdSumOdO<ProblemShape, Element, ElementAccumulator>>;
+  using OperationConvert = cutlass::fmha::device::Sm90DeviceKernel<
+      cutlass::fmha::kernel::
+          FmhaKernelBwdConvert<ProblemShape, Element, ElementAccumulator>>;
+
+  using Mainloop =
+      cutlass::fmha::collective::FmhaBwdMainloopTmaWarpSpecializedSm90<
+          Element,
+          ElementAccumulator,
+          TileShape,
+          cutlass::fmha::collective::FusionBwdAdapter<Fusion>,
+          Options...>;
+
+  using Epilogue = cutlass::fmha::collective::FmhaBwdEpilogueKV<
+      Element,
+      ElementAccumulator,
+      typename Mainloop::TileShapePV,
+      IsVarlen>;
+
+  using Operation = cutlass::fmha::device::Sm90DeviceKernel<
+      cutlass::fmha::kernel::FmhaKernelTmaWarpSpecialized<
+          ProblemShape,
+          Mainloop,
+          Epilogue,
+          cutlass::fmha::kernel::TileSchedulerBwdAdapter<
+              cutlass::fmha::kernel::IndividualTileScheduler>,
+          Options...>>;
+
   /// Argument structure: User API
   struct Arguments {
     ProblemShape problem_size;
@@ -100,39 +134,6 @@ class FmhaBwdSm90 {
 
     cutlass::KernelHardwareInfo hw_info;
   };
-
-  using OperationSumOdO = cutlass::fmha::device::Sm90DeviceKernel<
-      cutlass::fmha::kernel::
-          FmhaKernelBwdSumOdO<ProblemShape, Element, ElementAccumulator>>;
-  using OperationConvert = cutlass::fmha::device::Sm90DeviceKernel<
-      cutlass::fmha::kernel::
-          FmhaKernelBwdConvert<ProblemShape, Element, ElementAccumulator>>;
-
-  using Mainloop =
-      cutlass::fmha::collective::FmhaBwdMainloopTmaWarpSpecializedSm90<
-          Element,
-          ElementAccumulator,
-          TileShape,
-          cutlass::fmha::collective::FusionBwdAdapter<Fusion>,
-          Options...>;
-
-  static constexpr bool IsVarlen =
-      cutlass::fmha::collective::is_problem_shape_variable_length(
-          ProblemShape{});
-  using Epilogue = cutlass::fmha::collective::FmhaBwdEpilogueKV<
-      Element,
-      ElementAccumulator,
-      typename Mainloop::TileShapePV,
-      IsVarlen>;
-
-  using Operation = cutlass::fmha::device::Sm90DeviceKernel<
-      cutlass::fmha::kernel::FmhaKernelTmaWarpSpecialized<
-          ProblemShape,
-          Mainloop,
-          Epilogue,
-          cutlass::fmha::kernel::TileSchedulerBwdAdapter<
-              cutlass::fmha::kernel::IndividualTileScheduler>,
-          Options...>>;
 
   struct Params {
     OperationSumOdO op_sum_OdO;
