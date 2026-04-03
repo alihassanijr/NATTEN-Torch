@@ -650,36 +650,6 @@ struct FnaBwdMainloopTmaWarpSpecializedSm90 {
             update_params<IsVarlen, /* IsBackward = */ true, Mask>(
                 params.fna, blk_coord, problem_shape);
 
-#if 0
-    auto qkv_shape = params.fna.qkv_shape;
-    bool is_fully_block_sparse = params.fna.is_fully_block_sparse;
-    bool has_q_padding = params.fna.has_q_padding;
-    if (params.fna.requires_qkv_fixup) {
-      qkv_shape = Mask{}.correct_qkv_shape(
-          problem_shape,
-          params.fna.qkv_shape,
-          blk_coord,
-          params.fna.dilation,
-          params.fna.num_dilation_groups);
-      is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
-          qkv_shape,
-          get<0>(params.fna.na_params),
-          get<3>(params.fna.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_q_padding = not evenly_divides(qkv_shape, QTileShape{});
-    } else if (params.fna.is_dilated) {
-      qkv_shape = ceil_div(params.fna.qkv_shape, params.fna.dilation);
-      is_fully_block_sparse = fully_block_sparse<typename Mask::Causal>(
-          qkv_shape,
-          get<0>(params.fna.na_params),
-          get<3>(params.fna.na_params),
-          QTileShape{},
-          KVTileShape{});
-      has_q_padding = not evenly_divides(qkv_shape, QTileShape{});
-    }
-#endif
-
     auto [q_start, num_q_tiles] =
         Mask{}.get_trip_count(blk_coord, kv_shape, qkv_shape, na_params);
 
