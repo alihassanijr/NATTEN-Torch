@@ -107,13 +107,14 @@ class HopperFNABackendTest(unittest.TestCase):
         test_id = 0
         for dtype, atol, rtol in ALLOWED_DTYPES:
 
-            dummy = torch.randn(
-                (batch, *input_shape, heads, head_dim), device="cuda", dtype=dtype
+            forward_configs = get_all_forward_configs(
+                na_dim=na_dim, head_dim=head_dim, dtype=dtype, device="cuda"
             )
-            forward_configs = get_all_forward_configs(dummy)
-            backward_configs = get_all_backward_configs(dummy)
+            backward_configs = get_all_backward_configs(
+                na_dim=na_dim, head_dim=head_dim, dtype=dtype, device="cuda"
+            )
             assert len(forward_configs) > 0
-            assert len(backward_configs) > 0
+            test_backprop = len(backward_configs) > 0
 
             random.shuffle(forward_configs)
             random.shuffle(backward_configs)
@@ -122,9 +123,11 @@ class HopperFNABackendTest(unittest.TestCase):
                 (q_tile_shape, kv_tile_shape), kernel_schedule = forward_configs[
                     i % len(forward_configs)
                 ]
-                backward_q_tile_shape, backward_kv_tile_shape = backward_configs[
-                    i % len(backward_configs)
-                ]
+                backward_q_tile_shape, backward_kv_tile_shape = None, None
+                if test_backprop:
+                    backward_q_tile_shape, backward_kv_tile_shape = backward_configs[
+                        i % len(backward_configs)
+                    ]
 
                 tester.test(
                     eps=atol,
@@ -136,6 +139,7 @@ class HopperFNABackendTest(unittest.TestCase):
                     backward_q_tile_shape=backward_q_tile_shape,
                     backward_kv_tile_shape=backward_kv_tile_shape,
                     kernel_schedule=kernel_schedule,
+                    test_backprop=test_backprop,
                 )
                 test_id += 1
                 if configs_to_test is not None and test_id > configs_to_test:
@@ -452,7 +456,7 @@ class HopperFNABackendTest(unittest.TestCase):
             batch = random.choice(range(1, 4))
             heads = random.choice(range(1, 4))
             heads_kv = random.choice([i for i in range(1, heads + 1) if heads % i == 0])
-            head_dim = random.choice([32, 64, 128])
+            head_dim = random.choice([32, 64, 128, 256])
 
             input_shape = []
             for j in range(na_dim):

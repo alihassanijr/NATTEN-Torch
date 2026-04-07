@@ -26,6 +26,9 @@
           implementation.
       * All knobs affecting determinism are checked against PyTorch's deterministic mode. Just set
           pytorch to deterministic and NATTEN will respect that setting.
+* Experimental kernels and API for Variable Length Fused Neighborhood Attention (Varlen FNA),
+    supported in Hopper and Blackwell FNA kernels.
+    Refer to [Varlen FNA docs](docs/varlen.md) for more information.
 
 ## [0.21.5] - 2026-02-08
 * Extended Attention (FMHA) functionality:
