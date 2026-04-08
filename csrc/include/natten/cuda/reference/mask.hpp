@@ -344,6 +344,40 @@ struct NeighborhoodAttentionReferenceMask {
   }
 };
 
+// Reference FMHA Mask
+// Causal is top-left only for now
+template <bool IsCausal>
+struct ReferenceMask {
+  CUTE_DEVICE ReferenceMask() {}
+
+  template <class AccQK, class IndexQK, class ProblemShape>
+  CUTE_DEVICE void apply_mask(
+      AccQK& acc_qk,
+      IndexQK const& index_qk,
+      const ProblemShape& problem_shape) {
+    if constexpr (IsCausal) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < size(acc_qk); i++) {
+        auto pos = index_qk(i);
+        if ((get<0>(pos) < get<1>(pos)) ||
+            (get<1>(pos) >= get<1>(problem_shape))) {
+          acc_qk(i) = -INFINITY;
+        }
+      }
+
+    } else {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < size(acc_qk); i++) {
+        auto pos = index_qk(i);
+        if (get<0>(pos) >= get<0>(problem_shape) ||
+            get<1>(pos) >= get<1>(problem_shape)) {
+          acc_qk(i) = -INFINITY;
+        }
+      }
+    }
+  }
+};
+
 } // namespace mask
 
 } // namespace reference

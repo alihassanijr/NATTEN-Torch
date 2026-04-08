@@ -32,6 +32,8 @@ def libnatten_import_error(*args, **kwargs):
 
 
 # Reference kernels
+reference_fmha_forward = libnatten_import_error
+reference_fmha_backward = libnatten_import_error
 reference_na1d_forward = libnatten_import_error
 reference_na2d_forward = libnatten_import_error
 reference_na3d_forward = libnatten_import_error

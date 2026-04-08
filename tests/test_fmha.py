@@ -188,20 +188,30 @@ def compute_natten_fmha_reference(
     v = v.requires_grad_(True)
     d_out = d_out.requires_grad_(True)
 
-    out, lse = attention(
-        q,
-        k,
-        v,
-        is_causal=is_causal,
-        backend=backend,
-        q_tile_size=q_tile_size,
-        kv_tile_size=kv_tile_size,
-        backward_q_tile_size=backward_q_tile_size,
-        backward_kv_tile_size=backward_kv_tile_size,
-        backward_kv_splits=backward_kv_splits,
-        backward_use_pt_reduction=backward_use_pt_reduction,
-        return_lse=True,
-    )
+    if backend == "reference":
+        from natten.backends.reference import reference_fmha
+        out, lse = reference_fmha(
+            q,
+            k,
+            v,
+            is_causal=is_causal,
+            return_lse=True,
+        )
+    else:
+        out, lse = attention(
+            q,
+            k,
+            v,
+            is_causal=is_causal,
+            backend=backend,
+            q_tile_size=q_tile_size,
+            kv_tile_size=kv_tile_size,
+            backward_q_tile_size=backward_q_tile_size,
+            backward_kv_tile_size=backward_kv_tile_size,
+            backward_kv_splits=backward_kv_splits,
+            backward_use_pt_reduction=backward_use_pt_reduction,
+            return_lse=True,
+        )
 
     with torch.no_grad():
         out_ref = out.clone().float()

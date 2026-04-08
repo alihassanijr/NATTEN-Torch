@@ -24,16 +24,12 @@ void {kernel_name}(
       void* ptr_O,
       void* ptr_LSE,
       int batch_size,
-      int seqlen,
+      int seqlen_q,
+      int seqlen_kv,
       int heads,
       int heads_kv,
       int dim,
       int dim_value,
-      int num_additional_kv,
-      {DimType} qkv_shape,
-      {DimType} window_size,
-      {DimType} stride,
-      {DimType} dilation,
       float attn_scale,
       cudaStream_t stream);
 """
@@ -47,39 +43,28 @@ void {kernel_name}(
       void* ptr_O,
       void* ptr_LSE,
       int batch_size,
-      int seqlen,
+      int seqlen_q,
+      int seqlen_kv,
       int heads,
       int heads_kv,
       int dim,
       int dim_value,
-      int num_additional_kv,
-      {DimType} qkv_shape,
-      {DimType} window_size,
-      {DimType} stride,
-      {DimType} dilation,
       float attn_scale,
       cudaStream_t stream) {{
 
-  using Causal = {Causal};
-
-  fna_reference_forward(
+  fmha_reference_forward<{Causal}>(
     static_cast<{dtype}*>(ptr_Q),
     static_cast<{dtype}*>(ptr_K),
     static_cast<{dtype}*>(ptr_V),
     static_cast<{dtype}*>(ptr_O),
     static_cast<float*>(ptr_LSE),
     batch_size,
-    seqlen,
+    seqlen_q,
+    seqlen_kv,
     heads,
     heads_kv,
     dim,
     dim_value,
-    num_additional_kv,
-    qkv_shape,
-    window_size,
-    stride,
-    dilation,
-    Causal{{}},
     attn_scale,
     stream);
 }}
@@ -98,16 +83,12 @@ void {kernel_name}(
       void* ptr_DV,
       void* ptr_LSE,
       int batch_size,
-      int seqlen,
+      int seqlen_q,
+      int seqlen_kv,
       int heads,
       int heads_kv,
       int dim,
       int dim_value,
-      int num_additional_kv,
-      {DimType} qkv_shape,
-      {DimType} window_size,
-      {DimType} stride,
-      {DimType} dilation,
       float attn_scale,
       cudaStream_t stream);
 """
@@ -125,22 +106,16 @@ void {kernel_name}(
       void* ptr_DV,
       void* ptr_LSE,
       int batch_size,
-      int seqlen,
+      int seqlen_q,
+      int seqlen_kv,
       int heads,
       int heads_kv,
       int dim,
       int dim_value,
-      int num_additional_kv,
-      {DimType} qkv_shape,
-      {DimType} window_size,
-      {DimType} stride,
-      {DimType} dilation,
       float attn_scale,
       cudaStream_t stream) {{
 
-  using Causal = {Causal};
-
-  fna_reference_backward(
+  fmha_reference_backward<{Causal}>(
     static_cast<{dtype}*>(ptr_Q),
     static_cast<{dtype}*>(ptr_K),
     static_cast<{dtype}*>(ptr_V),
@@ -151,17 +126,12 @@ void {kernel_name}(
     static_cast<{dtype}*>(ptr_DV),
     static_cast<float*>(ptr_LSE),
     batch_size,
-    seqlen,
+    seqlen_q,
+    seqlen_kv,
     heads,
     heads_kv,
     dim,
     dim_value,
-    num_additional_kv,
-    qkv_shape,
-    window_size,
-    stride,
-    dilation,
-    Causal{{}},
     attn_scale,
     stream);
 }}
@@ -181,42 +151,25 @@ Half = DataType("cutlass::half_t", "float16", "torch::kFloat16", 16)
 BFloat = DataType("cutlass::bfloat16_t", "bfloat16", "torch::kBFloat16", 16)
 
 
-def iterable_to_static_cute_tuple(shape_in) -> str:
-    shape = ", ".join([f"cute::Int<{x}>" for x in shape_in])
-    return f"cute::tuple<{shape}>"
-
-
-def get_dim_type(na_dim: int) -> str:
-    shape = ", ".join(["int" for _ in range(na_dim)])
-    return f"cute::tuple<{shape}>"
-
-
-class ReferenceFnaInstance:
+class ReferenceFmhaInstance:
     def __init__(
         self,
-        na_dim: int,
         dtype: DataType,
         causal: tuple,
         is_backward: bool,
     ):
-        assert 0 < na_dim <= 3
-        assert na_dim == len(causal)
-        self.na_dim = na_dim
         self.causal = causal
         self.dtype = dtype
         self.is_backward = is_backward
 
     def get_causal_cute(self) -> str:
-        consts = ", ".join(
-            ["cute::true_type" if c else "cute::false_type" for c in self.causal]
-        )
-        return f"cute::tuple<{consts}>"
+        return "true" if self.causal else "false"
 
     def get_name(self) -> str:
-        backward_str = "" if not self.is_backward else "_backward"
-        name = f"reference_fna{self.na_dim}d{backward_str}"
+        backward_str = "forward" if not self.is_backward else "backward"
+        name = f"reference_fmha_{backward_str}"
         name += f"_{self.dtype.short_name}"
-        name += "_causal" + "x".join(["1" if c else "0" for c in self.causal])
+        name += "_causal" if self.causal else ""
         return name
 
     def get_decl(self) -> str:
@@ -224,7 +177,6 @@ class ReferenceFnaInstance:
             KERNEL_BWD_DECL_TEMPLATE if self.is_backward else KERNEL_DECL_TEMPLATE
         ).format(
             kernel_name=self.get_name(),
-            DimType=get_dim_type(self.na_dim),
             dtype=self.dtype.name,
         )
 
@@ -233,7 +185,6 @@ class ReferenceFnaInstance:
             KERNEL_BWD_IMPL_TEMPLATE if self.is_backward else KERNEL_IMPL_TEMPLATE
         ).format(
             kernel_name=self.get_name(),
-            DimType=get_dim_type(self.na_dim),
             Causal=self.get_causal_cute(),
             dtype=self.dtype.name,
         )
@@ -255,8 +206,8 @@ def write_combined_source_file(path, filename, headers, kernels):
     source_head += ["#include <natten/natten.h>\n"]
     source_head += ["#include <natten/helpers.h>\n"]
 
-    source_head += ["#include <natten/cuda/reference/fna_reference_forward.hpp>\n"]
-    source_head += ["#include <natten/cuda/reference/fna_reference_backward.hpp>\n"]
+    source_head += ["#include <natten/cuda/reference/fmha_reference_forward.hpp>\n"]
+    source_head += ["#include <natten/cuda/reference/fmha_reference_backward.hpp>\n"]
 
     for header in headers:
         source_head += [f"#include <{header}>\n"]
@@ -288,56 +239,26 @@ def write_combined_source_file(path, filename, headers, kernels):
         f.write(source_foot)
 
 
-class NaDimDispatcher:
-    def __init__(self, is_backward: bool):
-        fwd_bwd_str = "BACKWARD" if is_backward else "FORWARD"
-        self.name = f"DISPATCH_REFERENCE_FNA_{fwd_bwd_str}"
-        self.dims: List[int] = []
-        self.is_backward = is_backward
-
-    def append(self, na_dim: int):
-        self.dims.append(na_dim)
-
-    def get_dispatcher(self):
-        dispatcher_str = ""
-        dispatcher_str += f"#define {self.name}(rank, dtype, is_causal, ...) \\\n"
-        dispatcher_str += "  [&] { \\\n"
-        for i, na_dim in enumerate(self.dims):
-            dispatcher_str += "    "
-            if i > 0:
-                dispatcher_str += "else "
-            dispatcher_str += f"if constexpr (rank == {na_dim})"
-            dispatcher_str += " { \\\n"
-            dispatcher_str += "    "
-            dispatcher_str += (
-                f"  {self.name}_{na_dim}D(dtype, is_causal, __VA_ARGS__); \\\n"
-            )
-            dispatcher_str += "    } \\\n"
-        dispatcher_str += "    else { \\\n"
-        dispatcher_str += (
-            '      std::cerr << "Reference FNA kernel launch failed!" \\\n'
-        )
-        dispatcher_str += (
-            '                << "' + "NATTEN only supports NA1D, 2D, and 3D!" + '" \\\n'
-        )
-        dispatcher_str += "                << std::endl; \\\n"
-        dispatcher_str += "      exit(EXIT_FAILURE); \\\n"
-        dispatcher_str += "    } \\\n"
-        dispatcher_str += "}();"
-        dispatcher_str += "\n\n"
-        return dispatcher_str
-
-
 class DTypeDispatcher:
-    def __init__(self, is_backward: bool, na_dim: int):
+    def __init__(self, is_backward: bool):
         self.dtypes: List[DataType] = []
-        self.na_dim = na_dim
         fwd_bwd_str = "BACKWARD" if is_backward else "FORWARD"
-        self.name = f"DISPATCH_REFERENCE_FNA_{fwd_bwd_str}_{self.na_dim}D"
+        self.name = f"DISPATCH_REFERENCE_FMHA_{fwd_bwd_str}"
         self.is_backward = is_backward
 
     def append(self, dtype: DataType):
         self.dtypes.append(dtype)
+
+    def get_target_name(self, dtype, is_causal):
+        kernel = self.get_kernel_instance(dtype, is_causal)
+        return kernel.get_name()
+
+    def get_kernel_instance(self, dtype, is_causal):
+        return ReferenceFmhaInstance(
+            dtype=dtype,
+            causal=is_causal,
+            is_backward=self.is_backward,
+        )
 
     def get_dispatcher(self):
         dispatcher_str = ""
@@ -350,93 +271,19 @@ class DTypeDispatcher:
             dispatcher_str += f"if (dtype == {dtype.torch_name})"
             dispatcher_str += " { \\\n"
             dispatcher_str += "    "
-            dispatcher_str += (
-                f"  {self.name}_{dtype.short_name}(is_causal, __VA_ARGS__); \\\n"
-            )
+            dispatcher_str += "  if (is_causal) { "
+            dispatcher_str += f"natten::cuda::reference::{self.get_target_name(dtype, True)}(__VA_ARGS__); \\\n"
+            dispatcher_str += "  } else { "
+            dispatcher_str += f"natten::cuda::reference::{self.get_target_name(dtype, False)}(__VA_ARGS__); \\\n"
+            dispatcher_str += "  }"
             dispatcher_str += "    } \\\n"
         dispatcher_str += "    else { \\\n"
         dispatcher_str += (
-            '      std::cerr << "Reference FNA kernel launch failed!" \\\n'
+            '      std::cerr << "Reference FMHA kernel launch failed!" \\\n'
         )
         dispatcher_str += (
             '                << "'
-            + f"Reference FNA-{self.na_dim}D does not support this data type."
-            + '" \\\n'
-        )
-        dispatcher_str += "                << std::endl; \\\n"
-        dispatcher_str += "      exit(EXIT_FAILURE); \\\n"
-        dispatcher_str += "    } \\\n"
-        dispatcher_str += "}();"
-        dispatcher_str += "\n\n"
-        return dispatcher_str
-
-
-class CausalMaskDispatcher:
-    def __init__(
-        self,
-        is_backward: bool,
-        na_dim: int,
-        dtype: DataType,
-    ):
-        self.na_dim = na_dim
-        self.dtype = dtype
-
-        fwd_bwd_str = "BACKWARD" if is_backward else "FORWARD"
-        self.name = f"DISPATCH_REFERENCE_FNA_{fwd_bwd_str}_{self.na_dim}D_{self.dtype.short_name}"
-        self.is_backward = is_backward
-
-        self.cms: List = []
-
-    def append(self, cm):
-        assert len(cm) == self.na_dim, f"{cm} incompatible for {self.na_dim}D NA."
-        self.cms.append(cm)
-
-    def get_kernel_instance(self, cm):
-        return ReferenceFnaInstance(
-            na_dim=self.na_dim,
-            dtype=self.dtype,
-            causal=cm,
-            is_backward=self.is_backward,
-        )
-
-    def get_target_name(self, cm):
-        kernel = self.get_kernel_instance(cm)
-        return kernel.get_name()
-
-    def get_dispatcher(self):
-        dispatcher_str = ""
-        dispatcher_str += f"#define {self.name}(is_causal, ...) \\\n"
-        dispatcher_str += "  [&] { \\\n"
-        i = 0
-        for cm in self.cms:
-            dispatcher_str += "    "
-            if i > 0:
-                dispatcher_str += "else "
-            i += 1
-            dispatcher_str += "if ("
-            for dim in range(self.na_dim):
-                dispatcher_str += (
-                    f"cute::get<{dim}>(is_causal)"
-                    if cm[dim]
-                    else f"not cute::get<{dim}>(is_causal)"
-                )
-                if dim != self.na_dim - 1:
-                    dispatcher_str += " && "
-            dispatcher_str += ")"
-            dispatcher_str += " { \\\n"
-            dispatcher_str += "    "
-
-            dispatcher_str += f"    natten::cuda::reference::{self.get_target_name(cm)}(__VA_ARGS__); \\\n"
-
-            dispatcher_str += "    } \\\n"
-        dispatcher_str += "    else { \\\n"
-        dispatcher_str += "    "
-        dispatcher_str += (
-            '      std::cerr << "Reference FNA kernel launch failed!" \\\n'
-        )
-        dispatcher_str += (
-            '                << "'
-            + "Causal mask dispatcher got invalid causal mask!"
+            + "Reference FMHA does not support this data type."
             + '" \\\n'
         )
         dispatcher_str += "                << std::endl; \\\n"
@@ -477,9 +324,7 @@ def write_header_file(content, path, namespaces, extra_includes=None):
         f.write("".join(header_foot))
 
 
-def generate_reference_fna_kernels(path, num_splits=2):
-
-    NA_DIMS = [1, 2, 3]
+def generate_reference_fmha_kernels(path, num_splits=2):
 
     SUPPORTED_DTYPES = [
         Float,
@@ -487,73 +332,34 @@ def generate_reference_fna_kernels(path, num_splits=2):
         BFloat,
     ]
 
-    CAUSAL_MASKS = {
-        1: [(False,), (True,)],
-        2: [(False, False), (False, True), (True, False), (True, True)],
-        3: [
-            (False, False, False),
-            (False, False, True),
-            (False, True, False),
-            (False, True, True),
-            (True, False, False),
-            (True, False, True),
-            (True, True, False),
-            (True, True, True),
-        ],
-    }
-
-    dtype_dispatchers = []
-    cm_dispatchers = []
     kernels = []
 
-    rank_dispatcher = NaDimDispatcher(is_backward=False)
-    rank_dispatcher_bwd = NaDimDispatcher(is_backward=True)
-    for na_dim in NA_DIMS:
-        rank_dispatcher.append(na_dim)
-        rank_dispatcher_bwd.append(na_dim)
+    dispatcher_fwd = DTypeDispatcher(is_backward=False)
+    dispatcher_bwd = DTypeDispatcher(is_backward=True)
 
-        for is_backward in [False, True]:
-            dtype_dispatcher = DTypeDispatcher(is_backward=is_backward, na_dim=na_dim)
-            for dtype in SUPPORTED_DTYPES:
-                dtype_dispatcher.append(dtype)
-
-                cm_dispatcher = CausalMaskDispatcher(
-                    is_backward=is_backward, na_dim=na_dim, dtype=dtype
+    for dtype_dispatcher in [dispatcher_fwd, dispatcher_bwd]:
+        for dtype in SUPPORTED_DTYPES:
+            dtype_dispatcher.append(dtype)
+            for is_causal in [True, False]:
+                kernels.append(
+                    dtype_dispatcher.get_kernel_instance(
+                        dtype=dtype, is_causal=is_causal
+                    )
                 )
-                for cm in CAUSAL_MASKS[na_dim]:
-                    cm_dispatcher.append(cm)
-                    kernels.append(cm_dispatcher.get_kernel_instance(cm))
 
-                cm_dispatchers.append(cm_dispatcher)
-            dtype_dispatchers.append(dtype_dispatcher)
-
-    #
-
-    path_to_sources = f"{path}/autogen/src/cuda/reference_fna/"
-    rel_header = "natten_autogen/cuda/reference_fna/"
+    path_to_sources = f"{path}/autogen/src/cuda/reference_fmha/"
+    rel_header = "natten_autogen/cuda/reference_fmha/"
     path_to_header_dir = f"{path}/autogen/include/{rel_header}"
 
     os.makedirs(path_to_sources, exist_ok=False)
     os.makedirs(path_to_header_dir, exist_ok=False)
 
     path_headers = f"{path_to_header_dir}kernels.h"
-    path_rank = f"{path_to_header_dir}interface.h"
-    path_dtype = f"{path_to_header_dir}dispatch_dtype.h"
-    path_cm = f"{path_to_header_dir}dispatch_cm.h"
+    path_api = f"{path_to_header_dir}interface.h"
 
     rel_path_headers = f"{rel_header}kernels.h"
-    rel_path_dtype = f"{rel_header}dispatch_dtype.h"
-    rel_path_cm = f"{rel_header}dispatch_cm.h"
 
-    rank_disp = rank_dispatcher.get_dispatcher() + rank_dispatcher_bwd.get_dispatcher()
-
-    dtype_disp = ""
-    for dispatcher in dtype_dispatchers:
-        dtype_disp += dispatcher.get_dispatcher()
-
-    cm_disp = ""
-    for dispatcher in cm_dispatchers:
-        cm_disp += dispatcher.get_dispatcher()
+    disp = dispatcher_fwd.get_dispatcher() + dispatcher_bwd.get_dispatcher()
 
     headers = ""
     for kernel in kernels:
@@ -602,17 +408,15 @@ def generate_reference_fna_kernels(path, num_splits=2):
         "torch/extension.h",
         "natten/natten.h",
         "natten/helpers.h",
-        "natten/cuda/reference/fna_reference_forward.hpp",
-        "natten/cuda/reference/fna_reference_backward.hpp",
+        "natten/cuda/reference/fmha_reference_forward.hpp",
+        "natten/cuda/reference/fmha_reference_backward.hpp",
     ]
-    write_header_file(rank_disp, path_rank, namespaces, cuda_headers + [rel_path_dtype])
-    write_header_file(dtype_disp, path_dtype, namespaces, cuda_headers + [rel_path_cm])
-    write_header_file(cm_disp, path_cm, namespaces, cuda_headers + [rel_path_headers])
+    write_header_file(disp, path_api, namespaces, cuda_headers + [rel_path_headers])
     write_header_file(headers, path_headers, namespaces, cuda_headers)
 
 
-def generate_reference_fna(output_directory: str, num_splits: int):
-    generate_reference_fna_kernels(output_directory, num_splits=num_splits)
+def generate_reference_fmha(output_directory: str, num_splits: int):
+    generate_reference_fmha_kernels(output_directory, num_splits=num_splits)
 
 
 if __name__ == "__main__":
@@ -632,4 +436,4 @@ if __name__ == "__main__":
         help="Number of source files into which the kernels are split. Default: 2.",
     )
     args = parser.parse_args()
-    generate_reference_fna(args.output_directory, args.num_splits)
+    generate_reference_fmha(args.output_directory, args.num_splits)

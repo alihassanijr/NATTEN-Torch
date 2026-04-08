@@ -137,6 +137,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
   // Reference kernels
   m.def(
+      "reference_fmha_forward", &natten::reference_fmha_forward, "Reference FMHA forward");
+  m.def(
+      "reference_fmha_backward", &natten::reference_fmha_backward, "Reference FMHA backward");
+
+  m.def(
       "reference_na1d_forward", &natten::reference_na1d_forward, "Reference NA1D forward");
 
   m.def(

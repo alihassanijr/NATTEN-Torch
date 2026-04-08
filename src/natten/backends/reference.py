@@ -32,6 +32,8 @@ amp_fwd = functools.partial(custom_fwd, device_type="cuda")
 amp_bwd = functools.partial(custom_bwd, device_type="cuda")
 
 from natten._libnatten import (
+    reference_fmha_backward,
+    reference_fmha_forward,
     reference_na1d_backward,
     reference_na1d_forward,
     reference_na2d_backward,
@@ -341,3 +343,99 @@ def na3d_reference(
         additional_values=additional_values,
         return_lse=return_lse,
     )
+
+
+class ReferenceFmhaAutogradFn(Function):
+    @staticmethod
+    @amp_fwd
+    def forward(
+        ctx,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        is_causal: bool,
+        scale: float,
+    ) -> Tuple[Tensor, Tensor]:
+
+        query = query.contiguous()
+        key = key.contiguous()
+        value = value.contiguous()
+
+        assert query.dim() == value.dim() == 4
+        assert query.shape[0] == value.shape[0]
+
+        output, logsumexp = reference_fmha_forward(
+            query,
+            key,
+            value,
+            is_causal,
+            scale,
+        )
+
+        ctx.save_for_backward(query, key, value, logsumexp, output)
+        ctx.is_causal = is_causal
+        ctx.scale = scale
+
+        return output, logsumexp
+
+    @staticmethod
+    @amp_bwd
+    def backward(ctx, grad_out: Tensor, grad_lse: Tensor) -> Tuple[
+        Tensor,
+        Tensor,
+        Tensor,
+        NoneType,
+        NoneType,
+    ]:
+        query, key, value, logsumexp, output = ctx.saved_tensors
+        d_output = grad_out.contiguous()
+
+        d_query, d_key, d_value = reference_fmha_backward(
+            query,
+            key,
+            value,
+            output,
+            d_output,
+            logsumexp,
+            ctx.is_causal,
+            ctx.scale,
+        )
+
+        return d_query, d_key, d_value, None, None
+
+
+def reference_fmha(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    is_causal: bool = False,
+    scale: Optional[float] = None,
+    return_lse: bool = False,
+) -> Union[Tensor, Tuple[Tensor, Tensor]]:
+
+    from natten.utils.checks import fmha_tensor_checks
+
+    fmha_tensor_checks(
+        query,
+        key,
+        value,
+        must_match_head_dims=False,
+        supports_gqa_mqa=True,
+        backend_name="Reference FMHA",
+    )
+
+    scale = scale or query.shape[-1] ** -0.5
+
+    # GQA/MQA is supported natively by the reference kernel
+    output, lse = ReferenceFmhaAutogradFn.apply(
+        query,
+        key,
+        value,
+        is_causal,
+        scale,
+    )
+
+    if return_lse:
+        return output, lse
+
+    return output

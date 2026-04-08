@@ -131,4 +131,27 @@ void reference_na3d_backward(
     const std::tuple<int32_t, int32_t, int32_t>& qkv_shape,
     int num_extra_kv);
 
+// FMHA
+void reference_fmha_forward(
+    at::Tensor& out,
+    const at::Tensor& query,
+    const at::Tensor& key,
+    const at::Tensor& value,
+    at::Tensor& logsumexp,
+    bool is_causal,
+    float attn_scale);
+
+void reference_fmha_backward(
+    at::Tensor& grad_query,
+    at::Tensor& grad_key,
+    at::Tensor& grad_value,
+    const at::Tensor& query,
+    const at::Tensor& key,
+    const at::Tensor& value,
+    const at::Tensor& out,
+    const at::Tensor& grad_out,
+    const at::Tensor& logsumexp,
+    bool is_causal,
+    float attn_scale);
+
 } // namespace natten

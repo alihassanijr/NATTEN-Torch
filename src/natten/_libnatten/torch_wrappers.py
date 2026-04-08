@@ -53,6 +53,8 @@ from natten.libnatten import (  # type: ignore[import-untyped]
     na2d_forward as na2d_forward_cxx,
     na3d_backward as na3d_backward_cxx,
     na3d_forward as na3d_forward_cxx,
+    reference_fmha_backward as reference_fmha_backward_cxx,
+    reference_fmha_forward as reference_fmha_forward_cxx,
     reference_na1d_backward as reference_na1d_backward_cxx,
     reference_na1d_forward as reference_na1d_forward_cxx,
     reference_na2d_backward as reference_na2d_backward_cxx,
@@ -1366,6 +1368,119 @@ def make_reference_fna_ops(na_dim):
 
 
 ################################################################################
+############################## Reference FMHA ops ##############################
+################################################################################
+
+
+# reference_fmha_forward
+@register_op("natten::reference_fmha_forward", mutates_args=(), device_types="cuda")
+def reference_fmha_forward_torch_op(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    is_causal: bool,
+    scale: float,
+) -> Tuple[Tensor, Tensor]:
+    query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
+
+    output_shape = [s for s in query.shape[:-1]] + [value.shape[-1]]
+    output = torch.empty(output_shape, device=query.device, dtype=query.dtype)
+
+    logsumexp = torch.empty(query.shape[:-1], dtype=torch.float32, device=query.device)
+
+    reference_fmha_forward_cxx(
+        output,
+        query,
+        key,
+        value,
+        logsumexp,
+        is_causal,
+        scale,
+    )
+
+    return output, logsumexp
+
+
+@register_fake("natten::reference_fmha_forward")
+def reference_fmha_forward_torch_fake_op(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    is_causal: bool,
+    scale: float,
+) -> Tuple[Tensor, Tensor]:
+    query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
+
+    output_shape = [s for s in query.shape[:-1]] + [value.shape[-1]]
+    output = torch.empty(output_shape, device=query.device, dtype=query.dtype)
+
+    logsumexp = torch.empty(query.shape[:-1], dtype=torch.float32, device=query.device)
+
+    return output, logsumexp
+
+
+# reference_fmha_backward
+@register_op("natten::reference_fmha_backward", mutates_args=(), device_types="cuda")
+def reference_fmha_backward_torch_op(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    output: Tensor,
+    d_output: Tensor,
+    logsumexp: Tensor,
+    is_causal: bool,
+    scale: float,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
+    output, d_output, logsumexp = [
+        maybe_contiguous(x) for x in (output, d_output, logsumexp)
+    ]
+
+    d_query = torch.empty_like(query)
+    d_key = torch.empty_like(key)
+    d_value = torch.empty_like(value)
+
+    reference_fmha_backward_cxx(
+        d_query,
+        d_key,
+        d_value,
+        query,
+        key,
+        value,
+        output,
+        d_output,
+        logsumexp,
+        is_causal,
+        scale,
+    )
+
+    return d_query, d_key, d_value
+
+
+@register_fake("natten::reference_fmha_backward")
+def reference_fmha_backward_torch_fake_op(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    output: Tensor,
+    d_output: Tensor,
+    logsumexp: Tensor,
+    is_causal: bool,
+    scale: float,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    query, key, value = [maybe_contiguous(x) for x in (query, key, value)]
+    output, d_output, logsumexp = [
+        maybe_contiguous(x) for x in (output, d_output, logsumexp)
+    ]
+
+    d_query = torch.empty_like(query)
+    d_key = torch.empty_like(key)
+    d_value = torch.empty_like(value)
+
+    return d_query, d_key, d_value
+
+
+################################################################################
 ################################# TokPerm ops  #################################
 ################################################################################
 
@@ -1685,6 +1800,9 @@ if DISABLE_TORCH_OPS:
     reference_na3d_forward = reference_na3d_forward_torch_op
     reference_na3d_backward = reference_na3d_backward_torch_op
 
+    reference_fmha_forward = reference_fmha_forward_torch_op
+    reference_fmha_backward = reference_fmha_backward_torch_op
+
     token_permute_1d = token_permute_1d_torch_op
     token_permute_2d = token_permute_2d_torch_op
     token_permute_3d = token_permute_3d_torch_op
@@ -1740,6 +1858,9 @@ else:
     reference_na3d_forward = torch.ops.natten.reference_na3d_forward
     reference_na3d_backward = torch.ops.natten.reference_na3d_backward
 
+    reference_fmha_forward = torch.ops.natten.reference_fmha_forward
+    reference_fmha_backward = torch.ops.natten.reference_fmha_backward
+
     token_permute_1d = torch.ops.natten.token_permute_1d
     token_permute_2d = torch.ops.natten.token_permute_2d
     token_permute_3d = torch.ops.natten.token_permute_3d
@@ -1778,6 +1899,8 @@ __all__ = [
     "na2d_forward",
     "na3d_backward",
     "na3d_forward",
+    "reference_fmha_backward",
+    "reference_fmha_forward",
     "reference_na1d_backward",
     "reference_na1d_forward",
     "reference_na2d_backward",

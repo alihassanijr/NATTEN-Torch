@@ -192,7 +192,8 @@ def arch_list_to_cmake_tags(arch_list: List[int]) -> str:
 
 NUM_SPLITS = {
     "default": {
-        "reference": 2,
+        "reference-fna": 2,
+        "reference-fmha": 1,
         "fna": 64,
         "fmha": 6,
         "hopper-fna": 8,
@@ -205,7 +206,8 @@ NUM_SPLITS = {
         "blackwell-fmha-bwd": 4,
     },
     "fine": {
-        "reference": 4,
+        "reference-fna": 4,
+        "reference-fmha": 2,
         "fna": 128,
         "fmha": 12,
         "hopper-fna": 16,
@@ -218,7 +220,8 @@ NUM_SPLITS = {
         "blackwell-fmha-bwd": 6,
     },
     "coarse": {
-        "reference": 1,
+        "reference-fna": 1,
+        "reference-fmha": 1,
         "fna": 32,
         "fmha": 3,
         "hopper-fna": 4,
@@ -292,7 +295,8 @@ def autogen_kernel_instantitations(
     #     shutil.rmtree(autogen_dir)
 
     categories = {
-        "reference": ("autogen_reference_fna.py", "reference"),
+        "reference-fna": ("autogen_reference_fna.py", "reference_fna"),
+        "reference-fmha": ("autogen_reference_fmha.py", "reference_fmha"),
         "fna": ("autogen_fna.py", "fna"),
         "fmha": ("autogen_fmha.py", "fmha"),
     }

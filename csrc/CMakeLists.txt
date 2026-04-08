@@ -162,7 +162,7 @@ list(APPEND COMMON_HEADER_DIRS ./autogen/include)
 # Add source files
 file(GLOB MAIN_SOURCE  ./natten.cpp)
 file(GLOB TORCH_APIS  ./src/*.cpp ./src/*.cu)
-file(GLOB AUTOGEN_REFERENCE ./autogen/src/cuda/reference/*.cu)
+file(GLOB AUTOGEN_REFERENCE ./autogen/src/cuda/reference_fna/*.cu ./autogen/src/cuda/reference_fmha/*.cu)
 file(GLOB AUTOGEN_FNA ./autogen/src/cuda/fna/*.cu)
 file(GLOB AUTOGEN_FMHA ./autogen/src/cuda/fmha/*.cu)
 if(${NATTEN_WITH_HOPPER_FNA})

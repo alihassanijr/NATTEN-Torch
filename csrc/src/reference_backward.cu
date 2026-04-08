@@ -34,8 +34,10 @@
 #include <natten/natten.h>
 
 #ifdef NATTEN_WITH_CUTLASS
+#include <natten/cuda/reference/fmha_reference_backward.hpp>
 #include <natten/cuda/reference/fna_reference_backward.hpp>
-#include <natten_autogen/cuda/reference/interface.h>
+#include <natten_autogen/cuda/reference_fmha/interface.h>
+#include <natten_autogen/cuda/reference_fna/interface.h>
 
 template <typename StdTuple>
 auto std_tuple_to_cute_tuple(StdTuple a) {
@@ -121,7 +123,7 @@ void reference_na_generic_backward(
 
   TORCH_CHECK(
       query.size(0) == key.size(0),
-      "Blackwell FMHA forward: Query and key must match in batch size, got ",
+      "Reference FNA forward: Query and key must match in batch size, got ",
       "query.shape[0]=",
       query.size(0),
       ", key.shape[0]=",
@@ -129,7 +131,7 @@ void reference_na_generic_backward(
 
   TORCH_CHECK(
       query.size(3) == key.size(3),
-      "Blackwell FMHA forward: Query and key must match in head dim, got ",
+      "Reference FNA forward: Query and key must match in head dim, got ",
       "query.shape[3]=",
       query.size(3),
       ", key.shape[3]=",
@@ -138,7 +140,7 @@ void reference_na_generic_backward(
   // GQA/MQA is supported
   TORCH_CHECK(
       query.size(2) >= key.size(2),
-      "Blackwell FMHA forward: Query heads must be greater than or equal to key/value heads, got ",
+      "Reference FNA forward: Query heads must be greater than or equal to key/value heads, got ",
       "query.shape[2]=",
       query.size(2),
       ", key.shape[2]=",
@@ -146,7 +148,7 @@ void reference_na_generic_backward(
 
   TORCH_CHECK(
       query.size(2) % key.size(2) == 0,
-      "Blackwell FMHA forward: Query heads must evenly divide key/value heads, got ",
+      "Reference FNA forward: Query heads must evenly divide key/value heads, got ",
       "query.shape[2]=",
       query.size(2),
       ", key.shape[2]=",
@@ -330,6 +332,132 @@ void reference_na3d_backward(
       attn_scale,
       qkv_shape,
       num_extra_kv);
+}
+
+// FMHA
+void reference_fmha_backward(
+    at::Tensor& grad_query,
+    at::Tensor& grad_key,
+    at::Tensor& grad_value,
+    const at::Tensor& query,
+    const at::Tensor& key,
+    const at::Tensor& value,
+    const at::Tensor& out,
+    const at::Tensor& grad_out,
+    const at::Tensor& logsumexp,
+    bool is_causal,
+    float attn_scale) {
+#ifdef NATTEN_WITH_CUTLASS
+  at::cuda::OptionalCUDAGuard device_guard(query.device());
+
+  CHECK_CUDA(query);
+  CHECK_CUDA(key);
+  CHECK_CUDA(value);
+  CHECK_CUDA(out);
+  CHECK_CUDA(grad_query);
+  CHECK_CUDA(grad_key);
+  CHECK_CUDA(grad_value);
+  CHECK_CUDA(grad_out);
+  CHECK_CUDA(logsumexp);
+
+  CHECK_CONTIGUOUS(query);
+  CHECK_CONTIGUOUS(key);
+  CHECK_CONTIGUOUS(value);
+  CHECK_CONTIGUOUS(grad_query);
+  CHECK_CONTIGUOUS(grad_key);
+  CHECK_CONTIGUOUS(grad_value);
+  CHECK_CONTIGUOUS(out);
+  CHECK_CONTIGUOUS(grad_out);
+  CHECK_CONTIGUOUS(logsumexp);
+
+  CheckIfPropertiesMatch(query, key, value);
+  CheckIfPropertiesMatch(grad_value, grad_out, out);
+  CheckIfPropertiesMatch(grad_query, grad_key, grad_value);
+  CheckIfPropertiesMatch(grad_query, query, value);
+
+  CheckIfTensorShapesMatchExceptHeadDim<1>(query, out);
+  CheckIfTensorShapesMatchExceptHeadDim<1>(key, value);
+  CheckIfTensorShapesMatch<1>(grad_query, query);
+  CheckIfTensorShapesMatch<1>(grad_key, key);
+  CheckIfTensorShapesMatch<1>(grad_value, value);
+  CheckIfTensorShapesMatch<1>(grad_out, out);
+  CheckLogSumExp<1>(out, logsumexp);
+
+  TORCH_CHECK(
+      query.size(0) == key.size(0),
+      "Reference FMHA backward: Query and key must match in batch size, got ",
+      "query.shape[0]=",
+      query.size(0),
+      ", key.shape[0]=",
+      key.size(0));
+
+  TORCH_CHECK(
+      query.size(3) == key.size(3),
+      "Reference FMHA backward: Query and key must match in head dim, got ",
+      "query.shape[3]=",
+      query.size(3),
+      ", key.shape[3]=",
+      key.size(3));
+
+  // GQA/MQA is supported
+  TORCH_CHECK(
+      query.size(2) >= key.size(2),
+      "Reference FMHA backward: Query heads must be greater than or equal to key/value heads, got ",
+      "query.shape[2]=",
+      query.size(2),
+      ", key.shape[2]=",
+      key.size(2));
+
+  TORCH_CHECK(
+      query.size(2) % key.size(2) == 0,
+      "Reference FMHA backward: Query heads must evenly divide key/value heads, got ",
+      "query.shape[2]=",
+      query.size(2),
+      ", key.shape[2]=",
+      key.size(2));
+
+  int batch_size = query.size(0);
+  int heads = query.size(2);
+  int heads_kv = key.size(2);
+  int dim = query.size(3);
+
+  int seqlen_q = query.size(1);
+  int seqlen_kv = key.size(1);
+  int dim_value = value.size(3);
+
+  TORCH_CHECK(
+      query.scalar_type() == torch::kFloat16 ||
+          query.scalar_type() == torch::kBFloat16 ||
+          query.scalar_type() == torch::kFloat32,
+      "Only FP32, FP16, and BF16 operands are supported for now.");
+
+  int device_id = query.device().index();
+  auto cuda_stream = at::cuda::getCurrentCUDAStream(device_id);
+
+  DISPATCH_REFERENCE_FMHA_BACKWARD(
+      query.scalar_type(),
+      is_causal,
+      static_cast<void*>(query.data_ptr()),
+      static_cast<void*>(key.data_ptr()),
+      static_cast<void*>(value.data_ptr()),
+      static_cast<void*>(out.data_ptr()),
+      static_cast<void*>(grad_out.data_ptr()),
+      static_cast<void*>(grad_query.data_ptr()),
+      static_cast<void*>(grad_key.data_ptr()),
+      static_cast<void*>(grad_value.data_ptr()),
+      static_cast<void*>(logsumexp.data_ptr()),
+      batch_size,
+      seqlen_q,
+      seqlen_kv,
+      heads,
+      heads_kv,
+      dim,
+      dim_value,
+      attn_scale,
+      cuda_stream);
+#else
+  TORCH_CHECK(false, "libnatten not compiled with CUTLASS.");
+#endif
 }
 
 } // namespace natten
