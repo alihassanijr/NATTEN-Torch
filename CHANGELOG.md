@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Main branch]
+* Experimental kernels and API for Variable Length Fused Neighborhood Attention (Varlen FNA),
+    supported in Hopper and Blackwell FNA kernels.
+    Refer to [Varlen FNA docs](docs/varlen.md) for more information.
 
 ## [0.21.6] - 2026-04-14
 * Fixed syntax error in natten.profiler (only affects `python < 3.12`)

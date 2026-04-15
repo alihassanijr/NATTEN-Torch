@@ -106,7 +106,7 @@ class FnaSm90 {
 
   /// Computes the maximum number of active blocks per multiprocessor
   static int maximum_active_blocks(int /* smem_capacity */ = -1) {
-    CUTLASS_TRACE_HOST("Universal::maximum_active_blocks()");
+    CUTLASS_TRACE_HOST("Sm90DeviceKernel::maximum_active_blocks()");
     int max_active_blocks = -1;
     int smem_size = Kernel::SharedStorageSize;
 
@@ -152,7 +152,7 @@ class FnaSm90 {
       void* workspace = nullptr,
       cudaStream_t stream = nullptr) {
     CUTLASS_TRACE_HOST(
-        "Universal::initialize() - workspace "
+        "Sm90DeviceKernel::initialize() - workspace "
         << workspace << ", stream: " << (stream ? "non-null" : "null"));
 
     // Initialize the workspace
@@ -192,7 +192,8 @@ class FnaSm90 {
   /// Update API is preserved in 3.0, but does not guarantee a lightweight
   /// update of params.
   Status update(Arguments const& args, void* workspace = nullptr) {
-    CUTLASS_TRACE_HOST("Universal()::update() - workspace: " << workspace);
+    CUTLASS_TRACE_HOST(
+        "Sm90DeviceKernel()::update() - workspace: " << workspace);
 
     size_t workspace_bytes = get_workspace_size(args);
     if (workspace_bytes > 0 && nullptr == workspace) {
@@ -207,7 +208,7 @@ class FnaSm90 {
   /// manage their own params. Supplied params struct must be construct by
   /// calling Kernel::to_underling_arguments()
   static Status run(Params& params, cudaStream_t stream = nullptr) {
-    CUTLASS_TRACE_HOST("Universal::run()");
+    CUTLASS_TRACE_HOST("Sm90DeviceKernel::run()");
     dim3 const block = Kernel::get_block_shape();
     dim3 const grid = get_grid_shape(params);
 
