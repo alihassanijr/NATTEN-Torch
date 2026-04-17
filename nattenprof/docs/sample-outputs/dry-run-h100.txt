@@ -1,0 +1,27 @@
+Use case is compatible with backend hopper-fmha.
+                           Backend: hopper-fmha                           
+                       Forward pass configurations                        
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ q_tile_size ┃ kv_tile_size ┃              kernel_schedule              ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│     128     │     128      │ KernelSchedule.WarpSpecializedCooperative │
+│     128     │     128      │  KernelSchedule.WarpSpecializedPingpong   │
+└─────────────┴──────────────┴───────────────────────────────────────────┘
+Use case is compatible with backend cutlass-fmha.
+    Backend: cutlass-fmha     
+ Forward pass configurations  
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ q_tile_size ┃ kv_tile_size ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│     32      │     128      │
+│     64      │      64      │
+│     64      │     128      │
+└─────────────┴──────────────┘
+Use case is compatible with backend flex-fmha.
+      Backend: flex-fmha      
+ Forward pass configurations  
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ q_tile_size ┃ kv_tile_size ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│     64      │      64      │
+└─────────────┴──────────────┘
