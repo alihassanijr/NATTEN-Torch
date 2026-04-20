@@ -401,9 +401,7 @@ python -m nattenprof na \
 
 ## Blackwell Examples
 
-!!! warning "TODO"
-    Blackwell sample outputs not yet generated. Run `nattenprof/docs/generate-samples.sh`
-    on a Blackwell cluster to populate them. See `nattenprof/docs/BLACKWELL_TODO.md`.
+TODO: Add Blackwell examples with sample output includes (similar to Hopper examples above).
 
 
 ## Batch Mode

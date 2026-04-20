@@ -1,0 +1,26 @@
+Use case:
+  batch=1, heads=24, heads_kv=24, dim=128, dim_value=128
+  seqlen_q=65536, seqlen_kv=65536, is_causal=False
+  dtype=bf16, backend=cudnn
+  warmup_steps=10, profiling_steps=1
+
+                              Breakdown                              
+┏━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Namespace ┃ Category ┃ Arch  ┃  Operation   ┃ # calls ┃  Runtime  ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━┩
+│   cuDNN   │ AttnFwd  │ Sm100 │ FMHAForward  │    1    │ 34.736ms  │
+│   cuDNN   │ AttnBwd  │ Sm100 │ FMHABackward │    1    │ 107.710ms │
+│   cuDNN   │ AttnBwd  │   -   │    SumOdO    │    1    │ 224.032us │
+│   cuDNN   │ AttnBwd  │   -   │   Convert    │    1    │ 175.456us │
+├───────────┼──────────┼───────┼──────────────┼─────────┼───────────┤
+│           │          │       │    Total     │         │ 142.846ms │
+└───────────┴──────────┴───────┴──────────────┴─────────┴───────────┘
+        Summary         
+┏━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Category ┃  Runtime  ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━┩
+│ AttnFwd  │ 34.736ms  │
+│ AttnBwd  │ 108.110ms │
+├──────────┼───────────┤
+│  Total   │ 142.846ms │
+└──────────┴───────────┘

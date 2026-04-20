@@ -1,0 +1,28 @@
+Use case:
+  batch=1, heads=1, heads_kv=1, dim=128, dim_value=128
+  seqlen_q=1024, seqlen_kv=1024, is_causal=False
+  dtype=bf16, backend=blackwell-fmha
+  warmup_steps=10, profiling_steps=1
+
+                             Breakdown                              
+┏━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┓
+┃ Namespace ┃ Category ┃ Arch  ┃  Operation   ┃ # calls ┃ Runtime  ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━┩
+│  CUTLASS  │ AttnFwd  │ Sm100 │ FMHAForward  │    1    │ 18.784us │
+│  CUTLASS  │ AttnBwd  │ Sm100 │ FMHABackward │    1    │ 23.456us │
+│  CUTLASS  │ AttnBwd  │ Sm100 │    SumOdO    │    1    │ 2.655us  │
+│  CUTLASS  │ AttnBwd  │ Sm100 │   Convert    │    1    │ 2.272us  │
+│  PyTorch  │   Misc   │   -   │     Init     │    1    │ 1.440us  │
+├───────────┼──────────┼───────┼──────────────┼─────────┼──────────┤
+│           │          │       │    Total     │         │ 48.607us │
+└───────────┴──────────┴───────┴──────────────┴─────────┴──────────┘
+        Summary        
+┏━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Category ┃ Runtime  ┃
+┡━━━━━━━━━━╇━━━━━━━━━━┩
+│ AttnFwd  │ 18.784us │
+│ AttnBwd  │ 28.383us │
+│   Misc   │ 1.440us  │
+├──────────┼──────────┤
+│  Total   │ 48.607us │
+└──────────┴──────────┘

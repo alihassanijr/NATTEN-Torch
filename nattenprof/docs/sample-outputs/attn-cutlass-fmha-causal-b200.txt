@@ -1,0 +1,27 @@
+Use case:
+  batch=1, heads=1, heads_kv=1, dim=128, dim_value=128
+  seqlen_q=1024, seqlen_kv=1024, is_causal=True
+  dtype=bf16, backend=cutlass-fmha
+  warmup_steps=10, profiling_steps=1
+
+                             Breakdown                              
+┏━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Namespace ┃ Category ┃ Arch ┃  Operation   ┃ # calls ┃  Runtime  ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━┩
+│  CUTLASS  │ AttnFwd  │ Sm80 │ FMHAForward  │    1    │ 73.119us  │
+│  CUTLASS  │ AttnBwd  │ Sm80 │ FMHABackward │    1    │ 205.372us │
+│  CUTLASS  │ AttnBwd  │  -   │    SumOdO    │    1    │  2.656us  │
+│  PyTorch  │   Misc   │  -   │     Init     │    2    │  2.944us  │
+├───────────┼──────────┼──────┼──────────────┼─────────┼───────────┤
+│           │          │      │    Total     │         │ 284.091us │
+└───────────┴──────────┴──────┴──────────────┴─────────┴───────────┘
+        Summary         
+┏━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Category ┃  Runtime  ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━┩
+│ AttnFwd  │ 73.119us  │
+│ AttnBwd  │ 208.028us │
+│   Misc   │  2.944us  │
+├──────────┼───────────┤
+│  Total   │ 284.091us │
+└──────────┴───────────┘

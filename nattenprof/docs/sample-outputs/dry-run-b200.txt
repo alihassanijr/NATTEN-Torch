@@ -1,0 +1,26 @@
+Use case is compatible with backend blackwell-fmha.
+   Backend: blackwell-fmha    
+ Forward pass configurations  
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ q_tile_size ┃ kv_tile_size ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│     256     │     128      │
+└─────────────┴──────────────┘
+Use case is compatible with backend cutlass-fmha.
+    Backend: cutlass-fmha     
+ Forward pass configurations  
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ q_tile_size ┃ kv_tile_size ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│     32      │     128      │
+│     64      │      64      │
+│     64      │     128      │
+└─────────────┴──────────────┘
+Use case is compatible with backend flex-fmha.
+      Backend: flex-fmha      
+ Forward pass configurations  
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ q_tile_size ┃ kv_tile_size ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│     64      │      64      │
+└─────────────┴──────────────┘

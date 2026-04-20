@@ -188,6 +188,22 @@ def _make_pool(problem, opts: ProfileOptions, heads_last: bool = True) -> Tensor
     )
 
 
+def _format_tile_info(opts: ProfileOptions) -> str:
+    """Format tile shape info for display in use case header."""
+    parts = []
+    if opts.q_tile is not None:
+        parts.append(f"q_tile={opts.q_tile}")
+    if opts.kv_tile is not None:
+        parts.append(f"kv_tile={opts.kv_tile}")
+    if opts.bwd_q_tile is not None:
+        parts.append(f"bwd_q_tile={opts.bwd_q_tile}")
+    if opts.bwd_kv_tile is not None:
+        parts.append(f"bwd_kv_tile={opts.bwd_kv_tile}")
+    if not parts:
+        return ""
+    return "  " + ", ".join(parts)
+
+
 def _build_result(
     operation: str,
     problem,
@@ -201,6 +217,9 @@ def _build_result(
         )
     else:
         use_case = problem.format_use_case(backend=opts.backend)
+    tile_info = _format_tile_info(opts)
+    if tile_info:
+        use_case += "\n" + tile_info
     use_case += "\n" + _profiling_info_str(opts.warmup_steps)
 
     return ProfileResult(

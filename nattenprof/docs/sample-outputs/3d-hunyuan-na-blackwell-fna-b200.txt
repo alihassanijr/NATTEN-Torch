@@ -1,0 +1,33 @@
+Use case:
+  batch=1, heads=24, heads_kv=24, dim=128, dim_value=128
+  input_size=(30, 48, 80), is_causal=(False, False, False)
+  window_size=(18, 24, 24), stride=(1, 1, 1), dilation=(1, 1, 1)
+  dtype=bf16, backend=blackwell-fna
+  q_tile=(4, 8, 8), kv_tile=(2, 8, 8), bwd_q_tile=(2, 8, 8), bwd_kv_tile=(2, 8, 8)
+  warmup_steps=10, profiling_steps=1
+
+                              Breakdown                              
+┏━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Namespace ┃ Category  ┃ Arch  ┃  Operation  ┃ # calls ┃  Runtime  ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━┩
+│  CUTLASS  │  AttnFwd  │ Sm100 │ FNAForward  │    1    │ 38.129ms  │
+│  CUTLASS  │  AttnBwd  │ Sm100 │ FNABackward │    1    │ 67.364ms  │
+│  CUTLASS  │  AttnBwd  │ Sm100 │   SumOdO    │    1    │ 389.855us │
+│  CUTLASS  │  AttnBwd  │ Sm100 │   Convert   │    1    │ 625.279us │
+│  CUTLASS  │ MemoryOps │   -   │   TokPerm   │    9    │  5.270ms  │
+│  CUTLASS  │ MemoryOps │   -   │  TokUnperm  │    5    │  3.867ms  │
+│  PyTorch  │   Misc    │   -   │    Init     │    1    │  2.848us  │
+├───────────┼───────────┼───────┼─────────────┼─────────┼───────────┤
+│           │           │       │    Total    │         │ 115.648ms │
+└───────────┴───────────┴───────┴─────────────┴─────────┴───────────┘
+         Summary         
+┏━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Category  ┃  Runtime  ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━┩
+│  AttnFwd  │ 38.129ms  │
+│  AttnBwd  │ 68.379ms  │
+│ MemoryOps │  9.137ms  │
+│   Misc    │  2.848us  │
+├───────────┼───────────┤
+│   Total   │ 115.648ms │
+└───────────┴───────────┘
