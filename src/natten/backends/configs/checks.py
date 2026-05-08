@@ -542,7 +542,6 @@ def can_run_cutlass_hopper_fna_varlen(
         )
         return False
 
-    requires_grad = query.requires_grad or key.requires_grad or value.requires_grad
     if requires_grad and torch.are_deterministic_algorithms_enabled():
         target_fn(
             "Can't run Varlen Hopper FNA; its backprop does not have a deterministic mode, but "
