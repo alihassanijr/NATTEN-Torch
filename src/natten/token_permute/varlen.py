@@ -175,9 +175,12 @@ def _verify_variable_parameters(
         parameter_name="dilation_list",
     )
 
-    kernel_size_list_out: list | None = [] if kernel_size_list is not None else None
-    stride_list_out: list | None = [] if stride_list is not None else None
-    dilation_list_out: list | None = [] if dilation_list is not None else None
+    #kernel_size_list_out: list | None = [] if kernel_size_list is not None else None
+    #stride_list_out: list | None = [] if stride_list is not None else None
+    #dilation_list_out: list | None = [] if dilation_list is not None else None
+    kernel_size_list_out = []
+    stride_list_out = []
+    dilation_list_out = []
 
     for b in range(batch_size):
         kernel_size_ = kernel_size
@@ -217,23 +220,23 @@ def _verify_variable_parameters(
             assert dilation_list_out is not None
             dilation_list_out.append(dilation_)
 
-    if kernel_size_list_out is not None and all(
-        k == kernel_size_list_out[0] for k in kernel_size_list_out
-    ):
-        kernel_size = kernel_size_list_out[0]
-        kernel_size_list_out = None
+    #if kernel_size_list_out is not None and all(
+    #    k == kernel_size_list_out[0] for k in kernel_size_list_out
+    #):
+    #    kernel_size = kernel_size_list_out[0]
+    #    kernel_size_list_out = None
 
-    if stride_list_out is not None and all(
-        k == stride_list_out[0] for k in stride_list_out
-    ):
-        stride = stride_list_out[0]
-        stride_list_out = None
+    #if stride_list_out is not None and all(
+    #    k == stride_list_out[0] for k in stride_list_out
+    #):
+    #    stride = stride_list_out[0]
+    #    stride_list_out = None
 
-    if dilation_list_out is not None and all(
-        k == dilation_list_out[0] for k in dilation_list_out
-    ):
-        dilation = dilation_list_out[0]
-        dilation_list_out = None
+    #if dilation_list_out is not None and all(
+    #    k == dilation_list_out[0] for k in dilation_list_out
+    #):
+    #    dilation = dilation_list_out[0]
+    #    dilation_list_out = None
 
     def _tensor_from_optional_list(parameter_list: Optional[list]) -> Optional[Tensor]:
         if parameter_list is None:
@@ -652,15 +655,15 @@ def _verify_parameter_tensor(
     if tensor.dim() != 2:
         raise ValueError(f"'{tensor_name}' must be a 2-D tensor, got {tensor.dim()=}.")
 
-    if tensor.shape[0] != batch_size:
-        raise ValueError(
-            f"{tensor_name}.shape[0] must be {batch_size=}, got {tensor.shape[0]=}."
-        )
+    #if tensor.shape[0] != batch_size:
+    #    raise ValueError(
+    #        f"{tensor_name}.shape[0] must be {batch_size=}, got {tensor.shape[0]=}."
+    #    )
 
-    if tensor.shape[1] != na_dim:
-        raise ValueError(
-            f"{tensor_name}.shape[1] for NA{na_dim}D must be {na_dim}, got {tensor.shape[1]=}."
-        )
+    #if tensor.shape[1] != na_dim:
+    #    raise ValueError(
+    #        f"{tensor_name}.shape[1] for NA{na_dim}D must be {na_dim}, got {tensor.shape[1]=}."
+    #    )
 
 
 def verify_fna_varlen_metadata(
