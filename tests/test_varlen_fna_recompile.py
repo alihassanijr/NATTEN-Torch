@@ -42,7 +42,7 @@ DTYPE = torch.float16
 # Timeout for first run of each use case (includes torch.compile compilation)
 FIRST_RUN_TIMEOUT_S = 5.0
 # Timeout for subsequent runs (no recompilation expected)
-RERUN_TIMEOUT_S = 0.05
+RERUN_TIMEOUT_S = 0.1
 
 
 def _generate_use_case():

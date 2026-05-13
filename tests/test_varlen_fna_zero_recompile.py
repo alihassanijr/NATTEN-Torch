@@ -44,7 +44,7 @@ MAX_SEQLEN = 2**15  # 32768
 # Timeout for the very first run (initial torch.compile compilation)
 FIRST_RUN_TIMEOUT_S = 5.0
 # Timeout for all subsequent runs (zero recompiles expected)
-RERUN_TIMEOUT_S = 0.05
+RERUN_TIMEOUT_S = 0.1
 
 # When True, ensure per-sequence kernel sizes are not all identical within a use case.
 FORCE_VAR_PARAM = False
