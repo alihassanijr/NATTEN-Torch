@@ -163,10 +163,6 @@ void blackwell_fna_generic_forward(
   int heads_kv = key.size(2);
   int dim = query.size(3);
 
-  TORCH_CHECK(
-      dim == 32 || dim == 64 || dim == 128,
-      "Blackwell FNA forward only supports head dims 32, 64, and 128 for now.");
-
   if (logsumexp.has_value()) {
     CheckLogSumExp<1>(out, logsumexp.value());
     CHECK_CUDA(logsumexp.value());

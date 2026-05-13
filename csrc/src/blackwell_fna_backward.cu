@@ -185,10 +185,6 @@ void blackwell_fna_generic_backward(
   int heads_kv = key.size(2);
   int dim = query.size(3);
 
-  TORCH_CHECK(
-      dim == 32 || dim == 64 || dim == 128,
-      "Blackwell FNA backward only supports head dims 32, 64, and 128 for now.");
-
   if (not is_varlen) {
     CheckArgsAgainstDim(qkv_shape_, kernel_size, dilation_);
   }
