@@ -37,10 +37,18 @@ from natten.types import (
 from natten.utils.checks import check_tile_shape
 from natten.utils.device import get_device_cc
 
+SUPPORTED_DTYPES = [
+    torch.float16,
+    torch.bfloat16,
+]
+
 DTYPE_TO_BITS = {
     torch.float16: 16,
     torch.bfloat16: 16,
 }
+
+SUPPORTED_HEAD_DIMS_FWD = [32, 64, 128, 256]
+SUPPORTED_HEAD_DIMS_BWD = [32, 64, 128]
 
 # TODO: notes
 
@@ -167,66 +175,70 @@ HOPPER_BACKWARD_CONFIGS = {
 }
 
 
+# NOTE (ali again in 2026): for various reasons, we want to slowly move away from mapping Tensors to
+# configs/backends, and request specs directly (na_dim, head_dim, dtype, device).
+# We're making all the base APIs "tensor-less" and slowly replacing the old APIs with the new
+# format.
+
+
+# FNA API
 def get_all_forward_configs(
-    input_tensor: Tensor,
+    na_dim: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    device: torch.device,
 ) -> List[CutlassHopperFnaForwardConfigType]:
-    assert input_tensor.dim() in [4, 5, 6]
-    na_dim = input_tensor.dim() - 3  # batch, heads, head_dim
+    assert na_dim in [1, 2, 3]
+    device_cc = get_device_cc(device)
+    if (
+        device_cc != 90
+        or head_dim not in SUPPORTED_HEAD_DIMS_FWD
+        or dtype not in SUPPORTED_DTYPES
+    ):
+        return []
 
-    dtype = input_tensor.dtype
     dtype_bits = DTYPE_TO_BITS[dtype]
-
-    head_dim = input_tensor.shape[-1]
-
-    # if dtype not in [torch.float16, torch.bfloat16]:
-    if dtype_bits not in HOPPER_FORWARD_CONFIGS[na_dim]:  # type: ignore
-        return []
-
-    # if head_dim not in [32, 64, 128, 256]:
-    if head_dim not in HOPPER_FORWARD_CONFIGS[na_dim][dtype_bits]:  # type: ignore
-        return []
-
-    device_cc = get_device_cc(input_tensor.device)
-    if device_cc != 90:
-        return []
+    assert dtype_bits in HOPPER_FORWARD_CONFIGS[na_dim]  # type: ignore
+    assert head_dim in HOPPER_FORWARD_CONFIGS[na_dim][dtype_bits]  # type: ignore
 
     return HOPPER_FORWARD_CONFIGS[na_dim][dtype_bits][head_dim]  # type: ignore
 
 
 def get_all_backward_configs(
-    input_tensor: Tensor,
+    na_dim: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    device: torch.device,
 ) -> List[CutlassHopperFnaBackwardConfigType]:
-    assert input_tensor.dim() in [4, 5, 6]
-    na_dim = input_tensor.dim() - 3  # batch, heads, head_dim
+    assert na_dim in [1, 2, 3]
+    device_cc = get_device_cc(device)
+    if (
+        device_cc != 90
+        or head_dim not in SUPPORTED_HEAD_DIMS_BWD
+        or dtype not in SUPPORTED_DTYPES
+    ):
+        return []
 
-    dtype = input_tensor.dtype
     dtype_bits = DTYPE_TO_BITS[dtype]
-
-    head_dim = input_tensor.shape[-1]
-
-    # if dtype not in [torch.float16, torch.bfloat16]:
-    if dtype_bits not in HOPPER_BACKWARD_CONFIGS[na_dim]:  # type: ignore
-        return []
-
-    # if head_dim not in [32, 64, 128, 256]:
-    if head_dim not in HOPPER_BACKWARD_CONFIGS[na_dim][dtype_bits]:  # type: ignore
-        return []
-
-    device_cc = get_device_cc(input_tensor.device)
-    if device_cc != 90:
-        return []
+    assert dtype_bits in HOPPER_BACKWARD_CONFIGS[na_dim]  # type: ignore
+    assert head_dim in HOPPER_BACKWARD_CONFIGS[na_dim][dtype_bits]  # type: ignore
 
     return HOPPER_BACKWARD_CONFIGS[na_dim][dtype_bits][head_dim]  # type: ignore
 
 
-# For FMHA
+# FMHA API
 def get_all_fmha_forward_configs(
     input_tensor: Tensor,
 ) -> List[CutlassHopperFmhaForwardConfigType]:
     if input_tensor.dim() != 4:
         raise ValueError("Only 4-D tensors are supported in FMHA.")
 
-    configs_multi_dim = get_all_forward_configs(input_tensor)
+    configs_multi_dim = get_all_forward_configs(
+        na_dim=1,
+        head_dim=input_tensor.shape[-1],
+        dtype=input_tensor.dtype,
+        device=input_tensor.device,
+    )
     assert all(len(q_t) == len(kv_t) == 1 for (q_t, kv_t), _ in configs_multi_dim)
 
     configs_fmha = [
@@ -236,13 +248,19 @@ def get_all_fmha_forward_configs(
     return configs_fmha
 
 
+# FMHA API
 def get_all_fmha_backward_configs(
     input_tensor: Tensor,
 ) -> List[CutlassHopperFmhaBackwardConfigType]:
     if input_tensor.dim() != 4:
         raise ValueError("Only 4-D tensors are supported in FMHA.")
 
-    configs_multi_dim = get_all_backward_configs(input_tensor)
+    configs_multi_dim = get_all_backward_configs(
+        na_dim=1,
+        head_dim=input_tensor.shape[-1],
+        dtype=input_tensor.dtype,
+        device=input_tensor.device,
+    )
     assert all(len(q_t) == len(kv_t) == 1 for q_t, kv_t in configs_multi_dim)
 
     configs_fmha = [(q_t[0], kv_t[0]) for q_t, kv_t in configs_multi_dim]
@@ -250,36 +268,46 @@ def get_all_fmha_backward_configs(
     return configs_fmha
 
 
+# FNA API
 def get_default_forward_config(
     input_tensor: Tensor,
 ) -> CutlassHopperFnaForwardConfigType:
-    all_configs = get_all_forward_configs(input_tensor)
+    assert input_tensor.dim() in [4, 5, 6]
+    na_dim = input_tensor.dim() - 3  # batch, heads, head_dim
+
+    return get_default_forward_config_tensorless(
+        na_dim=na_dim,
+        head_dim=input_tensor.shape[-1],
+        dtype=input_tensor.dtype,
+        device=input_tensor.device,
+    )
+
+
+# FNA API - tensor-less
+def get_default_forward_config_tensorless(
+    na_dim: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> CutlassHopperFnaForwardConfigType:
+    all_configs = get_all_forward_configs(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        dtype=dtype,
+        device=device,
+    )
 
     if len(all_configs) < 1:
-        device_cc = get_device_cc(input_tensor.device)
+        device_cc = get_device_cc(device)
         raise ValueError(
             "No configs exist for this use case; Hopper FMHA/FNA does not support it: "
-            f"{input_tensor.shape=}, {input_tensor.dtype=}, {device_cc=}."
+            f"{na_dim=}, {head_dim=}, {dtype=}, {device=} ({device_cc=})."
         )
 
     return all_configs[0]
 
 
-def get_default_backward_config(
-    input_tensor: Tensor,
-) -> CutlassHopperFnaBackwardConfigType:
-    all_configs = get_all_backward_configs(input_tensor)
-
-    if len(all_configs) < 1:
-        device_cc = get_device_cc(input_tensor.device)
-        raise ValueError(
-            "No configs exist for this use case; Hopper FMHA/FNA does not support it: "
-            f"{input_tensor.shape=}, {input_tensor.dtype=}, {device_cc=}."
-        )
-
-    return all_configs[0]
-
-
+# FMHA API
 def get_default_fmha_forward_config(
     input_tensor: Tensor,
 ) -> CutlassHopperFmhaForwardConfigType:
@@ -292,6 +320,46 @@ def get_default_fmha_forward_config(
     return (q_t[0], kv_t[0]), sched
 
 
+# FNA API
+def get_default_backward_config(
+    input_tensor: Tensor,
+) -> CutlassHopperFnaBackwardConfigType:
+    assert input_tensor.dim() in [4, 5, 6]
+    na_dim = input_tensor.dim() - 3  # batch, heads, head_dim
+
+    return get_default_backward_config_tensorless(
+        na_dim=na_dim,
+        head_dim=input_tensor.shape[-1],
+        dtype=input_tensor.dtype,
+        device=input_tensor.device,
+    )
+
+
+# FNA API - tensor-less
+def get_default_backward_config_tensorless(
+    na_dim: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> CutlassHopperFnaBackwardConfigType:
+    all_configs = get_all_backward_configs(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        dtype=dtype,
+        device=device,
+    )
+
+    if len(all_configs) < 1:
+        device_cc = get_device_cc(device)
+        raise ValueError(
+            "No configs exist for this use case; Hopper FMHA/FNA does not support it: "
+            f"{na_dim=}, {head_dim=}, {dtype=}, {device=} ({device_cc=})."
+        )
+
+    return all_configs[0]
+
+
+# FMHA API
 def get_default_fmha_backward_config(
     input_tensor: Tensor,
 ) -> CutlassHopperFmhaBackwardConfigType:
@@ -304,6 +372,7 @@ def get_default_fmha_backward_config(
     return q_t[0], kv_t[0]
 
 
+# FNA API
 def check_cutlass_hopper_fna_forward_config(
     input_tensor: Tensor,
     q_tile_shape: Optional[DimensionType] = None,
@@ -313,6 +382,29 @@ def check_cutlass_hopper_fna_forward_config(
     assert input_tensor.dim() in [4, 5, 6]
     na_dim = input_tensor.dim() - 3  # batch, heads, head_dim
 
+    return check_cutlass_hopper_fna_forward_config_tensorless(
+        na_dim=na_dim,
+        head_dim=input_tensor.shape[-1],
+        dtype=input_tensor.dtype,
+        device=input_tensor.device,
+        q_tile_shape=q_tile_shape,
+        kv_tile_shape=kv_tile_shape,
+        kernel_schedule=kernel_schedule,
+    )
+
+
+# FNA API - tensor-less
+def check_cutlass_hopper_fna_forward_config_tensorless(
+    na_dim: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    q_tile_shape: Optional[DimensionType] = None,
+    kv_tile_shape: Optional[DimensionType] = None,
+    kernel_schedule: Optional[KernelSchedule] = None,
+) -> CutlassHopperFnaForwardConfigType:
+    assert na_dim in [1, 2, 3]
+
     if (q_tile_shape is None) ^ (kv_tile_shape is None):
         raise ValueError(
             "Please specify both q_tile_shape and kv_tile_shape, or neither one. "
@@ -320,8 +412,11 @@ def check_cutlass_hopper_fna_forward_config(
         )
 
     (default_q_tile_shape, default_kv_tile_shape), default_sched = (
-        get_default_forward_config(input_tensor=input_tensor)
+        get_default_forward_config_tensorless(
+            na_dim=na_dim, head_dim=head_dim, dtype=dtype, device=device
+        )
     )
+
     if q_tile_shape is None and kv_tile_shape is None and kernel_schedule is None:
         return (default_q_tile_shape, default_kv_tile_shape), default_sched  # type: ignore[return-value]
 
@@ -332,7 +427,12 @@ def check_cutlass_hopper_fna_forward_config(
     q_tile_shape = check_tile_shape(q_tile_shape)
     kv_tile_shape = check_tile_shape(kv_tile_shape)
 
-    configs = get_all_forward_configs(input_tensor=input_tensor)
+    configs = get_all_forward_configs(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        dtype=dtype,
+        device=device,
+    )
 
     for (q_t, kv_t), sched in configs:
         if (
@@ -363,60 +463,7 @@ def check_cutlass_hopper_fna_forward_config(
     )
 
 
-def check_cutlass_hopper_fna_backward_config(
-    input_tensor: Tensor,
-    q_tile_shape: Optional[DimensionType] = None,
-    kv_tile_shape: Optional[DimensionType] = None,
-) -> CutlassHopperFnaBackwardConfigType:
-    assert input_tensor.dim() in [4, 5, 6]
-    na_dim = input_tensor.dim() - 3  # batch, heads, head_dim
-
-    if (q_tile_shape is None) ^ (kv_tile_shape is None):
-        raise ValueError(
-            "Please specify both q_tile_shape and kv_tile_shape, or neither one. "
-            f"Got {q_tile_shape=}, {kv_tile_shape=}."
-        )
-
-    default_q_tile_shape, default_kv_tile_shape = get_default_backward_config(
-        input_tensor=input_tensor
-    )
-    if q_tile_shape is None and kv_tile_shape is None:
-        return default_q_tile_shape, default_kv_tile_shape  # type: ignore[return-value]
-
-    elif q_tile_shape is None and kv_tile_shape is None:
-        q_tile_shape = default_q_tile_shape
-        kv_tile_shape = default_kv_tile_shape
-
-    q_tile_shape = check_tile_shape(q_tile_shape)
-    kv_tile_shape = check_tile_shape(kv_tile_shape)
-
-    configs = get_all_backward_configs(input_tensor=input_tensor)
-
-    for q_t, kv_t in configs:
-        if q_t == q_tile_shape and kv_t == kv_tile_shape:
-            return q_t, kv_t  # type: ignore
-
-    # Fail and make suggestions
-    MAX_EXAMPLES = 3
-    examples = ""
-    for i, (q_t, kv_t) in enumerate(configs):
-        examples += f"\n  q_tile_shape={q_t}, kv_tile_shape={kv_t}"
-        if i > MAX_EXAMPLES:
-            break
-
-    raise ValueError(
-        f"Invalid configuration for CUTLASS Hopper FNA-{na_dim}D Backward. "
-        f"Q tile shape {q_tile_shape} and KV tile shape {kv_tile_shape} "
-        f"are not among the {len(configs)} configurations implementable "
-        f"with CUTLASS Hopper FNA Backward. "
-        "Try selecting a combination from: \n"
-        "  natten.get_bwd_configs_for_hopper_fna(q, k, v)"
-        "\n"
-        "Here's a few examples of available combinations for your use case:\n"
-        f"{examples}"
-    )
-
-
+# FMHA API
 def check_cutlass_hopper_fmha_forward_config(
     input_tensor: Tensor,
     q_tile_size: Optional[int] = None,
@@ -472,6 +519,90 @@ def check_cutlass_hopper_fmha_forward_config(
     )
 
 
+# FNA API
+def check_cutlass_hopper_fna_backward_config(
+    input_tensor: Tensor,
+    q_tile_shape: Optional[DimensionType] = None,
+    kv_tile_shape: Optional[DimensionType] = None,
+) -> CutlassHopperFnaBackwardConfigType:
+    assert input_tensor.dim() in [4, 5, 6]
+    na_dim = input_tensor.dim() - 3  # batch, heads, head_dim
+
+    return check_cutlass_hopper_fna_backward_config_tensorless(
+        na_dim=na_dim,
+        head_dim=input_tensor.shape[-1],
+        dtype=input_tensor.dtype,
+        device=input_tensor.device,
+        q_tile_shape=q_tile_shape,
+        kv_tile_shape=kv_tile_shape,
+    )
+
+
+# FNA API - tensor-less
+def check_cutlass_hopper_fna_backward_config_tensorless(
+    na_dim: int,
+    head_dim: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    q_tile_shape: Optional[DimensionType] = None,
+    kv_tile_shape: Optional[DimensionType] = None,
+) -> CutlassHopperFnaBackwardConfigType:
+    assert na_dim in [1, 2, 3]
+
+    if (q_tile_shape is None) ^ (kv_tile_shape is None):
+        raise ValueError(
+            "Please specify both q_tile_shape and kv_tile_shape, or neither one. "
+            f"Got {q_tile_shape=}, {kv_tile_shape=}."
+        )
+
+    default_q_tile_shape, default_kv_tile_shape = (
+        get_default_backward_config_tensorless(
+            na_dim=na_dim, head_dim=head_dim, dtype=dtype, device=device
+        )
+    )
+    if q_tile_shape is None and kv_tile_shape is None:
+        return default_q_tile_shape, default_kv_tile_shape  # type: ignore[return-value]
+
+    elif q_tile_shape is None and kv_tile_shape is None:
+        q_tile_shape = default_q_tile_shape
+        kv_tile_shape = default_kv_tile_shape
+
+    q_tile_shape = check_tile_shape(q_tile_shape)
+    kv_tile_shape = check_tile_shape(kv_tile_shape)
+
+    configs = get_all_backward_configs(
+        na_dim=na_dim,
+        head_dim=head_dim,
+        dtype=dtype,
+        device=device,
+    )
+
+    for q_t, kv_t in configs:
+        if q_t == q_tile_shape and kv_t == kv_tile_shape:
+            return q_t, kv_t  # type: ignore
+
+    # Fail and make suggestions
+    MAX_EXAMPLES = 3
+    examples = ""
+    for i, (q_t, kv_t) in enumerate(configs):
+        examples += f"\n  q_tile_shape={q_t}, kv_tile_shape={kv_t}"
+        if i > MAX_EXAMPLES:
+            break
+
+    raise ValueError(
+        f"Invalid configuration for CUTLASS Hopper FNA-{na_dim}D Backward. "
+        f"Q tile shape {q_tile_shape} and KV tile shape {kv_tile_shape} "
+        f"are not among the {len(configs)} configurations implementable "
+        f"with CUTLASS Hopper FNA Backward. "
+        "Try selecting a combination from: \n"
+        "  natten.get_bwd_configs_for_hopper_fna(q, k, v)"
+        "\n"
+        "Here's a few examples of available combinations for your use case:\n"
+        f"{examples}"
+    )
+
+
+# FMHA API
 def check_cutlass_hopper_fmha_backward_config(
     input_tensor: Tensor,
     q_tile_size: Optional[int] = None,

@@ -93,6 +93,23 @@ class FmhaBwdSm100 {
   }
 
  public:
+  using OperationSumOdO = cutlass::fmha::device::FmhaSm100<
+      cutlass::fmha::kernel::
+          FmhaKernelBwdSumOdO<ProblemShape, Element, ElementAccumulator>>;
+  using OperationConvert = cutlass::fmha::device::FmhaSm100<
+      cutlass::fmha::kernel::
+          FmhaKernelBwdConvert<ProblemShape, Element, ElementAccumulator>>;
+
+  using Operation = cutlass::fmha::device::FmhaSm100<
+      cutlass::fmha::kernel::Sm100FmhaBwdKernelTmaWarpSpecialized<
+          ProblemShape,
+          Element,
+          ElementAccumulator,
+          TileShape,
+          Mask,
+          IsDeterministic>>;
+  using Kernel = typename Operation::Kernel;
+
   /// Argument structure: User API
   struct Arguments {
     // Q K D D_VO HB
@@ -135,23 +152,6 @@ class FmhaBwdSm100 {
 
     cutlass::KernelHardwareInfo hw_info;
   };
-
-  using OperationSumOdO = cutlass::fmha::device::FmhaSm100<
-      cutlass::fmha::kernel::
-          FmhaKernelBwdSumOdO<ProblemShape, Element, ElementAccumulator>>;
-  using OperationConvert = cutlass::fmha::device::FmhaSm100<
-      cutlass::fmha::kernel::
-          FmhaKernelBwdConvert<ProblemShape, Element, ElementAccumulator>>;
-
-  using Operation = cutlass::fmha::device::FmhaSm100<
-      cutlass::fmha::kernel::Sm100FmhaBwdKernelTmaWarpSpecialized<
-          ProblemShape,
-          Element,
-          ElementAccumulator,
-          TileShape,
-          Mask,
-          IsDeterministic>>;
-  using Kernel = typename Operation::Kernel;
 
   struct Params {
     OperationSumOdO op_sum_OdO;

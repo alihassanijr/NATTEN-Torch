@@ -91,10 +91,14 @@ struct FnaBuilder<
     Fusion,
     cutlass::gemm::KernelTma,
     Options...> {
+  static constexpr bool kIsVarlen =
+      cutlass::fmha::collective::is_problem_shape_variable_length(
+          ProblemShape{});
   using CollectiveMainloop = cutlass::fna::collective::FnaMainloopTmaSm90<
       NADim,
       QTileShape,
       KVTileShape,
+      kIsVarlen,
       Element,
       ElementAccumulator,
       TileShape,
@@ -105,8 +109,12 @@ struct FnaBuilder<
       Element,
       ElementAccumulator,
       typename CollectiveMainloop::TileShapePV,
-      cutlass::fmha::collective::is_problem_shape_variable_length(
-          ProblemShape{})>;
+      kIsVarlen // TODO: we don't need to fall back to STG here!! TokPerm
+                // guarantees we're always tile-divisible!
+                // We can't make the switch yet though; we'd need to port over a
+                // custom collective epilogue that allows domain offsetting the
+                // tma tensor.
+      >;
 
   using Kernel = cutlass::fmha::kernel::FmhaKernelTma<
       ProblemShape,
@@ -144,11 +152,15 @@ struct FnaBuilder<
     Fusion,
     cutlass::gemm::KernelTmaWarpSpecializedCooperative,
     Options...> {
+  static constexpr bool kIsVarlen =
+      cutlass::fmha::collective::is_problem_shape_variable_length(
+          ProblemShape{});
   using CollectiveMainloop =
       cutlass::fna::collective::FnaMainloopTmaWarpSpecializedSm90<
           NADim,
           QTileShape,
           KVTileShape,
+          kIsVarlen,
           Element,
           ElementAccumulatorQK,
           ElementAccumulatorPV,
@@ -163,8 +175,12 @@ struct FnaBuilder<
       Element,
       ElementAccumulatorPV,
       typename CollectiveMainloop::TileShapePV,
-      cutlass::fmha::collective::is_problem_shape_variable_length(
-          ProblemShape{})>;
+      kIsVarlen // TODO: we don't need to fall back to STG here!! TokPerm
+                // guarantees we're always tile-divisible!
+                // We can't make the switch yet though; we'd need to port over a
+                // custom collective epilogue that allows domain offsetting the
+                // tma tensor.
+      >;
 
   static constexpr bool kIsPersistent =
       find_option_t<Tag::kIsPersistent, false_type, Options...>::value;

@@ -72,7 +72,18 @@ void hopper_fna_generic_forward(
     const StdNADim& qkv_shape_, // before token permute and padding
     const StdNADim& query_tile_shape_,
     const StdNADim& key_tile_shape_,
-    int kernel_type) {
+    int kernel_type,
+    // varlen
+    const at::optional<at::Tensor>& cumulative_seqlen_Q,
+    const at::optional<at::Tensor>& cumulative_seqlen_KV,
+    const at::optional<at::Tensor>& token_layouts,
+    const at::optional<at::Tensor>& batch_map,
+    int max_seqlen_Q,
+    int max_seqlen_KV,
+    // var-param
+    const at::optional<at::Tensor>& kernel_sizes,
+    const at::optional<at::Tensor>& strides,
+    const at::optional<at::Tensor>& dilations) {
   static_assert(
       std::tuple_size_v<StdNADim> > 0 && std::tuple_size_v<StdNADim> < 4);
   static constexpr int kNADim = std::tuple_size_v<StdNADim>;
@@ -91,9 +102,17 @@ void hopper_fna_generic_forward(
   CHECK_CUDA(value);
   CHECK_CUDA(out);
 
+  // varlen
+  bool is_varlen = cumulative_seqlen_Q.has_value() ||
+      cumulative_seqlen_KV.has_value() || token_layouts.has_value();
+  bool is_varparam =
+      kernel_sizes.has_value() || strides.has_value() || dilations.has_value();
+
   at::cuda::OptionalCUDAGuard device_guard(query.device());
 
-  CheckArgs(kernel_size, stride_, dilation_);
+  if (not is_varparam) {
+    CheckArgs(kernel_size, stride_, dilation_);
+  }
   CheckIfPropertiesMatch(query, key, value);
 
   // NOTE (alih): q and kv might have slightly different shapes because we're
@@ -105,13 +124,49 @@ void hopper_fna_generic_forward(
   TORCH_CHECK(key.dim() == 4, "Tensors must be 4-D.");
   TORCH_CHECK(value.dim() == 4, "Tensors must be 4-D.");
 
+  TORCH_CHECK(
+      query.size(0) == key.size(0),
+      "Hopper FNA forward: Query and key must match in batch size, got ",
+      "query.shape[0]=",
+      query.size(0),
+      ", key.shape[0]=",
+      key.size(0));
+
+  TORCH_CHECK(
+      query.size(3) == key.size(3),
+      "Hopper FNA forward: Query and key must match in head dim, got ",
+      "query.shape[3]=",
+      query.size(3),
+      ", key.shape[3]=",
+      key.size(3));
+
+  // GQA/MQA is NOT supported
+  TORCH_CHECK(
+      query.size(2) == key.size(2),
+      "Hopper FNA forward: Query heads must be equal to key/value heads, got ",
+      "query.shape[2]=",
+      query.size(2),
+      ", key.shape[2]=",
+      key.size(2));
+
   int batch_size = query.size(0);
   int seqlen_q = query.size(1);
   int seqlen_kv = key.size(1);
   int heads = query.size(2);
   int dim = query.size(3);
 
-  CheckArgsAgainstDim(qkv_shape_, kernel_size, dilation_);
+  TORCH_CHECK(
+      dim == 32 || dim == 64 || dim == 128 || dim == 256,
+      "Hopper FNA only supports head dims 32, 64, 128, and 256 for now.");
+
+  if (logsumexp.has_value()) {
+    CheckLogSumExp<1>(out, logsumexp.value());
+    CHECK_CUDA(logsumexp.value());
+  }
+
+  if (not is_varlen) {
+    CheckArgsAgainstDim(qkv_shape_, kernel_size, dilation_);
+  }
 
   auto qkv_shape = std_tuple_to_cute_tuple(qkv_shape_);
   auto q_shape = std_tuple_to_cute_tuple(q_shape_);
@@ -125,48 +180,258 @@ void hopper_fna_generic_forward(
   auto dilation = std_tuple_to_cute_tuple(dilation_);
   auto is_causal = std_tuple_to_cute_tuple(is_causal_);
 
-  TORCH_CHECK(
-      size(q_shape) == seqlen_q,
-      "Q's sequence length (q.shape[1]) must match the size of Q shape.");
-  TORCH_CHECK(
-      size(kv_shape) == seqlen_kv,
-      "KV's sequence length ({k,v}.shape[1]) must match the size of KV shape.");
+  if (not is_varlen) {
+    TORCH_CHECK(
+        size(q_shape) == seqlen_q,
+        "Q's sequence length (q.shape[1]) must match the size of Q shape.");
+    TORCH_CHECK(
+        size(kv_shape) == seqlen_kv,
+        "KV's sequence length ({k,v}.shape[1]) must match the size of KV shape.");
 
-  if (logsumexp.has_value()) {
-    CheckLogSumExp<1>(out, logsumexp.value());
-    CHECK_CUDA(logsumexp.value());
+    TORCH_CHECK(
+        cute::evenly_divides(q_shape, query_tile_shape) &&
+            cute::evenly_divides(kv_shape, key_tile_shape),
+        "Hopper FNA forward: Tile shapes must evenly divide input. Please pad your inputs.");
   }
 
-  TORCH_CHECK(
-      dim == 32 || dim == 64 || dim == 128 || dim == 256,
-      "Hopper FNA only supports head dims 32, 64, 128, and 256 for now.");
-
+  int device_id = query.device().index();
+  auto cuda_stream = at::cuda::getCurrentCUDAStream(device_id);
   cudaDeviceProp* device_props =
       at::cuda::getDeviceProperties(query.device().index());
   const int cc = device_props->major * 10 + device_props->minor;
+
   TORCH_CHECK(
       cc == 90,
-      "This operation can only run on the Hopper architecture (SM90).");
+      "Hopper FNA forward can only run on the Hopper architecture (SM90).");
 
   TORCH_CHECK(
       query.scalar_type() == key.scalar_type() &&
           query.scalar_type() == value.scalar_type() &&
           query.scalar_type() == out.scalar_type(),
-      "Query, key, value, and output must match in dtype.");
+      "Hopper FNA forward: Query, key, value, and output must match in dtype.");
 
   TORCH_CHECK(
       query.scalar_type() == torch::kFloat16 ||
           query.scalar_type() == torch::kBFloat16,
-      "Only FP16/BF16 is supported for now.");
-
-  int device_id = query.device().index();
-  auto cuda_stream = at::cuda::getCurrentCUDAStream(device_id);
+      "Hopper FNA forward only supports FP16 and BF16 for now.");
 
   auto kernel_type_ =
       natten::cuda::hopper::kernel_type_int_to_enum_type(kernel_type);
   TORCH_CHECK(
       kernel_type_ != natten::cuda::hopper::HopperKernelSchedule::Invalid,
       "Got invalid kernel_type argument.");
+
+  void* ptr_cumulative_seqlen_Q = nullptr;
+  void* ptr_cumulative_seqlen_KV = nullptr;
+  void* ptr_token_layouts = nullptr;
+  void* ptr_batch_map = nullptr;
+
+  void* ptr_window_sizes = nullptr;
+  void* ptr_strides = nullptr;
+  void* ptr_dilations = nullptr;
+
+  if (is_varlen) {
+    TORCH_CHECK(
+        cumulative_seqlen_Q.has_value() && cumulative_seqlen_KV.has_value() &&
+            token_layouts.has_value(),
+        "Hopper FNA: cumulative_seqlen_Q, cumulative_seqlen_KV, and token_layouts must all be specified when using varlen.");
+
+    TORCH_CHECK(
+        batch_size == 1,
+        "Hopper FNA: Tensor batch size must be 1 (packed sequence layout), got ",
+        batch_size);
+
+    auto& cumulative_seqlen_Q_tensor = cumulative_seqlen_Q.value();
+    auto& cumulative_seqlen_KV_tensor = cumulative_seqlen_KV.value();
+    auto& token_layouts_tensor = token_layouts.value();
+
+    CHECK_CONTIGUOUS(cumulative_seqlen_Q_tensor);
+    CHECK_CONTIGUOUS(cumulative_seqlen_KV_tensor);
+    CHECK_CONTIGUOUS(token_layouts_tensor);
+
+    CHECK_CUDA(cumulative_seqlen_Q_tensor);
+    CHECK_CUDA(cumulative_seqlen_KV_tensor);
+    CHECK_CUDA(token_layouts_tensor);
+
+    TORCH_CHECK(
+        cumulative_seqlen_Q_tensor.dim() == 1,
+        "Hopper FNA: cumulative_seqlen_Q is expected to be a 1-D tensor.");
+    TORCH_CHECK(
+        cumulative_seqlen_KV_tensor.dim() == 1,
+        "Hopper FNA: cumulative_seqlen_KV is expected to be a 1-D tensor.");
+
+    TORCH_CHECK(
+        cumulative_seqlen_Q_tensor.size(0) ==
+            cumulative_seqlen_KV_tensor.size(0),
+        "Hopper FNA: cumulative_seqlen_Q and cumulative_seqlen_KV must be the same size.");
+
+    TORCH_CHECK(
+        cumulative_seqlen_Q_tensor.size(0) > 1,
+        "Hopper FNA: cumulative_seqlen_Q and cumulative_seqlen_KV size must be greater than 1.");
+
+    TORCH_CHECK(
+        cumulative_seqlen_Q_tensor.scalar_type() == torch::kInt,
+        "Hopper FNA: cumulative_seqlen_Q is expected to be an int32 tensor, got ",
+        cumulative_seqlen_Q_tensor.scalar_type());
+    TORCH_CHECK(
+        cumulative_seqlen_KV_tensor.scalar_type() == torch::kInt,
+        "Hopper FNA: cumulative_seqlen_KV is expected to be an int32 tensor, got ",
+        cumulative_seqlen_KV_tensor.scalar_type());
+
+    batch_size = cumulative_seqlen_Q_tensor.size(0) - 1;
+    auto batch_size_original = token_layouts_tensor.size(0);
+
+    TORCH_CHECK(
+        token_layouts_tensor.dim() == 2,
+        "Hopper FNA: token_layouts is expected to be a 2-D tensor.");
+
+    TORCH_CHECK(
+        token_layouts_tensor.size(1) == kNADim,
+        "Hopper FNA",
+        kNADim,
+        "-D: token_layouts.shape[1] must be ",
+        kNADim,
+        ", got ",
+        token_layouts_tensor.size(1),
+        ".");
+
+    TORCH_CHECK(
+        token_layouts_tensor.scalar_type() == torch::kInt,
+        "Hopper FNA: token_layouts is expected to be an int32 tensor, got ",
+        token_layouts_tensor.scalar_type());
+
+    ptr_cumulative_seqlen_Q =
+        static_cast<void*>(cumulative_seqlen_Q_tensor.data_ptr());
+    ptr_cumulative_seqlen_KV =
+        static_cast<void*>(cumulative_seqlen_KV_tensor.data_ptr());
+    ptr_token_layouts = static_cast<void*>(token_layouts_tensor.data_ptr());
+
+    if (is_varparam) {
+      if (kernel_sizes.has_value()) {
+        CHECK_CONTIGUOUS(kernel_sizes.value());
+        CHECK_CUDA(kernel_sizes.value());
+        TORCH_CHECK(
+            kernel_sizes.value().dim() == 2,
+            "Hopper FNA: kernel_sizes is expected to be a 2-D tensor.");
+
+        TORCH_CHECK(
+            kernel_sizes.value().size(0) == batch_size_original,
+            "Hopper FNA: kernel_sizes.shape[0] must match token_layouts.shape[0].");
+
+        TORCH_CHECK(
+            kernel_sizes.value().size(1) == kNADim,
+            "Hopper FNA",
+            kNADim,
+            "-D: kernel_sizes.shape[1] must be ",
+            kNADim,
+            ", got ",
+            kernel_sizes.value().size(1),
+            ".");
+
+        TORCH_CHECK(
+            kernel_sizes.value().scalar_type() == torch::kInt,
+            "Hopper FNA: kernel_sizes is expected to be an int32 tensor, got ",
+            kernel_sizes.value().scalar_type());
+
+        ptr_window_sizes = static_cast<void*>(kernel_sizes.value().data_ptr());
+      }
+
+      if (strides.has_value()) {
+        CHECK_CONTIGUOUS(strides.value());
+        CHECK_CUDA(strides.value());
+        TORCH_CHECK(
+            strides.value().dim() == 2,
+            "Hopper FNA: strides is expected to be a 2-D tensor.");
+
+        TORCH_CHECK(
+            strides.value().size(0) == batch_size_original,
+            "Hopper FNA: strides.shape[0] must be token_layouts.shape[0].");
+
+        TORCH_CHECK(
+            strides.value().size(1) == kNADim,
+            "Hopper FNA",
+            kNADim,
+            "-D: strides.shape[1] must be ",
+            kNADim,
+            ", got ",
+            strides.value().size(1),
+            ".");
+
+        TORCH_CHECK(
+            strides.value().scalar_type() == torch::kInt,
+            "Hopper FNA: strides is expected to be an int32 tensor, got ",
+            strides.value().scalar_type());
+
+        ptr_strides = static_cast<void*>(strides.value().data_ptr());
+      }
+
+      if (dilations.has_value()) {
+        CHECK_CONTIGUOUS(dilations.value());
+        CHECK_CUDA(dilations.value());
+        TORCH_CHECK(
+            dilations.value().dim() == 2,
+            "Hopper FNA: dilations is expected to be a 2-D tensor.");
+
+        TORCH_CHECK(
+            dilations.value().size(0) == batch_size_original,
+            "Hopper FNA: dilations.shape[0] must be token_layouts.shape[0].");
+
+        TORCH_CHECK(
+            dilations.value().size(1) == kNADim,
+            "Hopper FNA",
+            kNADim,
+            "-D: dilations.shape[1] must be ",
+            kNADim,
+            ", got ",
+            dilations.value().size(1),
+            ".");
+
+        TORCH_CHECK(
+            dilations.value().scalar_type() == torch::kInt,
+            "Hopper FNA: dilations is expected to be an int32 tensor, got ",
+            dilations.value().scalar_type());
+
+        ptr_dilations = static_cast<void*>(dilations.value().data_ptr());
+
+        // variable dilations requires batch_map
+        TORCH_CHECK(
+            batch_map.has_value(),
+            "Hopper FNA: batch_map must all be specified when using variable dilations.");
+
+        auto& batch_map_tensor = batch_map.value();
+        CHECK_CONTIGUOUS(batch_map_tensor);
+        CHECK_CUDA(batch_map_tensor);
+
+        TORCH_CHECK(
+            batch_map_tensor.dim() == 2,
+            "Hopper FNA: batch_map is expected to be a 2-D tensor.");
+
+        TORCH_CHECK(
+            batch_map_tensor.size(0) == batch_size,
+            "Hopper FNA: batch_map.shape[0] must be cumulative_seqlen_{Q,KV}.shape[0] - 1.");
+
+        TORCH_CHECK(
+            batch_map_tensor.size(1) == 2,
+            "Hopper FNA: batch_map.shape[1] must be ",
+            2,
+            ", got ",
+            batch_map_tensor.size(1),
+            ".");
+
+        TORCH_CHECK(
+            batch_map_tensor.scalar_type() == torch::kInt,
+            "Hopper FNA: batch_map is expected to be an int32 tensor, got ",
+            batch_map_tensor.scalar_type());
+
+        ptr_batch_map = static_cast<void*>(batch_map_tensor.data_ptr());
+      }
+    }
+
+  } else {
+    TORCH_CHECK(
+        not is_varparam,
+        "Hopper FNA: variable-parameter FNA is only supported with variable-length FNA.");
+  }
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
@@ -189,24 +454,40 @@ void hopper_fna_generic_forward(
       seqlen_kv,
       heads,
       dim,
+      attn_scale,
+      // fna / fusion parameters
       q_shape,
       kv_shape,
       qkv_shape,
       window_size,
       stride,
       dilation,
+      // varlen parameters
+      is_varlen,
+      max_seqlen_Q,
+      max_seqlen_KV,
+      ptr_cumulative_seqlen_Q,
+      ptr_cumulative_seqlen_KV,
+      ptr_token_layouts,
+      ptr_batch_map,
+      // var-param parameters
+      ptr_window_sizes,
+      ptr_strides,
+      ptr_dilations,
+      // init/launch params
       device_id,
-      attn_scale,
       cuda_stream,
       query.options());
 
 #else
   TORCH_CHECK(
       false,
-      "libnatten was not compiled with CUTLASS_ARCH_MMA_SM90_SUPPORTED.");
+      "Hopper FNA forward: libnatten was not compiled with CUTLASS_ARCH_MMA_SM90_SUPPORTED.");
 #endif
 #else
-  TORCH_CHECK(false, "libnatten was not compiled for Hopper (SM90).");
+  TORCH_CHECK(
+      false,
+      "Hopper FNA forward: libnatten was not compiled for Hopper (SM90).");
 #endif
 }
 
@@ -226,7 +507,18 @@ void hopper_na1d_forward(
     const std::tuple<int32_t>& qkv_shape,
     const std::tuple<int32_t>& query_tile_shape,
     const std::tuple<int32_t>& key_tile_shape,
-    int kernel_type) {
+    int kernel_type,
+    // varlen
+    const at::optional<at::Tensor>& cumulative_seqlen_Q,
+    const at::optional<at::Tensor>& cumulative_seqlen_KV,
+    const at::optional<at::Tensor>& token_layouts,
+    const at::optional<at::Tensor>& batch_map,
+    int max_seqlen_Q,
+    int max_seqlen_KV,
+    // var-param
+    const at::optional<at::Tensor>& kernel_sizes,
+    const at::optional<at::Tensor>& strides,
+    const at::optional<at::Tensor>& dilations) {
   TORCH_CHECK(query.dim() == 4, "Tensors must be 4-D.");
 
   hopper_fna_generic_forward(
@@ -245,7 +537,16 @@ void hopper_na1d_forward(
       qkv_shape,
       query_tile_shape,
       key_tile_shape,
-      kernel_type);
+      kernel_type,
+      cumulative_seqlen_Q,
+      cumulative_seqlen_KV,
+      token_layouts,
+      batch_map,
+      max_seqlen_Q,
+      max_seqlen_KV,
+      kernel_sizes,
+      strides,
+      dilations);
 }
 
 void hopper_na2d_forward(
@@ -264,7 +565,18 @@ void hopper_na2d_forward(
     const std::tuple<int32_t, int32_t>& qkv_shape,
     const std::tuple<int32_t, int32_t>& query_tile_shape,
     const std::tuple<int32_t, int32_t>& key_tile_shape,
-    int kernel_type) {
+    int kernel_type,
+    // varlen
+    const at::optional<at::Tensor>& cumulative_seqlen_Q,
+    const at::optional<at::Tensor>& cumulative_seqlen_KV,
+    const at::optional<at::Tensor>& token_layouts,
+    const at::optional<at::Tensor>& batch_map,
+    int max_seqlen_Q,
+    int max_seqlen_KV,
+    // var-param
+    const at::optional<at::Tensor>& kernel_sizes,
+    const at::optional<at::Tensor>& strides,
+    const at::optional<at::Tensor>& dilations) {
   TORCH_CHECK(query.dim() == 4, "Tensors must be 4-D.");
 
   hopper_fna_generic_forward(
@@ -283,7 +595,16 @@ void hopper_na2d_forward(
       qkv_shape,
       query_tile_shape,
       key_tile_shape,
-      kernel_type);
+      kernel_type,
+      cumulative_seqlen_Q,
+      cumulative_seqlen_KV,
+      token_layouts,
+      batch_map,
+      max_seqlen_Q,
+      max_seqlen_KV,
+      kernel_sizes,
+      strides,
+      dilations);
 }
 
 void hopper_na3d_forward(
@@ -302,7 +623,18 @@ void hopper_na3d_forward(
     const std::tuple<int32_t, int32_t, int32_t>& qkv_shape,
     const std::tuple<int32_t, int32_t, int32_t>& query_tile_shape,
     const std::tuple<int32_t, int32_t, int32_t>& key_tile_shape,
-    int kernel_type) {
+    int kernel_type,
+    // varlen
+    const at::optional<at::Tensor>& cumulative_seqlen_Q,
+    const at::optional<at::Tensor>& cumulative_seqlen_KV,
+    const at::optional<at::Tensor>& token_layouts,
+    const at::optional<at::Tensor>& batch_map,
+    int max_seqlen_Q,
+    int max_seqlen_KV,
+    // var-param
+    const at::optional<at::Tensor>& kernel_sizes,
+    const at::optional<at::Tensor>& strides,
+    const at::optional<at::Tensor>& dilations) {
   TORCH_CHECK(query.dim() == 4, "Tensors must be 4-D.");
 
   hopper_fna_generic_forward(
@@ -321,7 +653,16 @@ void hopper_na3d_forward(
       qkv_shape,
       query_tile_shape,
       key_tile_shape,
-      kernel_type);
+      kernel_type,
+      cumulative_seqlen_Q,
+      cumulative_seqlen_KV,
+      token_layouts,
+      batch_map,
+      max_seqlen_Q,
+      max_seqlen_KV,
+      kernel_sizes,
+      strides,
+      dilations);
 }
 
 } // namespace natten

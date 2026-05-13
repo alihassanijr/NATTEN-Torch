@@ -73,4 +73,82 @@ void token_unpermute_3d(
     const std::tuple<int32_t, int32_t, int32_t>& dilation,
     bool flip_tiled_dims);
 
+void token_permute_varlen_1d(
+    at::Tensor& out,
+    const at::Tensor& in,
+    const at::Tensor& offsets_original,
+    const at::Tensor& offsets_tokperm,
+    const at::Tensor& token_layouts,
+    const at::optional<at::Tensor>&
+        dilations, // per-batch dilations, if desired
+    int32_t seqlen_max,
+    const std::tuple<int32_t>& tile_shape,
+    const std::tuple<int32_t>& dilation,
+    bool flip_tiled_dims);
+
+void token_permute_varlen_2d(
+    at::Tensor& out,
+    const at::Tensor& in,
+    const at::Tensor& offsets_original,
+    const at::Tensor& offsets_tokperm,
+    const at::Tensor& token_layouts,
+    const at::optional<at::Tensor>&
+        dilations, // per-batch dilations, if desired
+    int32_t seqlen_max,
+    const std::tuple<int32_t, int32_t>& tile_shape,
+    const std::tuple<int32_t, int32_t>& dilation,
+    bool flip_tiled_dims);
+
+void token_permute_varlen_3d(
+    at::Tensor& out,
+    const at::Tensor& in,
+    const at::Tensor& offsets_original,
+    const at::Tensor& offsets_tokperm,
+    const at::Tensor& token_layouts,
+    const at::optional<at::Tensor>&
+        dilations, // per-batch dilations, if desired
+    int32_t seqlen_max,
+    const std::tuple<int32_t, int32_t, int32_t>& tile_shape,
+    const std::tuple<int32_t, int32_t, int32_t>& dilation,
+    bool flip_tiled_dims);
+
+void token_unpermute_varlen_1d(
+    at::Tensor& out,
+    const at::Tensor& in,
+    const at::Tensor& offsets_original,
+    const at::Tensor& offsets_tokperm,
+    const at::Tensor& token_layouts,
+    const at::optional<at::Tensor>&
+        dilations, // per-batch dilations, if desired
+    int32_t seqlen_max,
+    const std::tuple<int32_t>& tile_shape,
+    const std::tuple<int32_t>& dilation,
+    bool flip_tiled_dims);
+
+void token_unpermute_varlen_2d(
+    at::Tensor& out,
+    const at::Tensor& in,
+    const at::Tensor& offsets_original,
+    const at::Tensor& offsets_tokperm,
+    const at::Tensor& token_layouts,
+    const at::optional<at::Tensor>&
+        dilations, // per-batch dilations, if desired
+    int32_t seqlen_max,
+    const std::tuple<int32_t, int32_t>& tile_shape,
+    const std::tuple<int32_t, int32_t>& dilation,
+    bool flip_tiled_dims);
+
+void token_unpermute_varlen_3d(
+    at::Tensor& out,
+    const at::Tensor& in,
+    const at::Tensor& offsets_original,
+    const at::Tensor& offsets_tokperm,
+    const at::Tensor& token_layouts,
+    const at::optional<at::Tensor>&
+        dilations, // per-batch dilations, if desired
+    int32_t seqlen_max,
+    const std::tuple<int32_t, int32_t, int32_t>& tile_shape,
+    const std::tuple<int32_t, int32_t, int32_t>& dilation,
+    bool flip_tiled_dims);
+
 } // namespace natten

@@ -24,6 +24,10 @@ Use `torch.compile` in earlier versions at your own risk.
 - [x] Causal masking
 - [x] Variable length with sequence-packed format
 
+**FNA-specific features**
+- [ ] Variable length / size with sequence-packed format (experimental)
+- [ ] Variable parameters for variable length use cases (experimental)
+
 ![FNA visualization](assets/ampere-fna-viz.png){ width="80%" }
 /// caption
 Visualization of FNA, as proposed in
@@ -83,6 +87,10 @@ following functions in your code.
 - [x] Causal masking
 - [x] Variable length with sequence-packed format
 
+**FNA-specific features**
+- [x] Variable length / size with sequence-packed format (experimental)
+- [x] Variable parameters for variable length use cases (experimental)
+
 ![Hopper FNA performance sample](assets/hopper-fna-perf.png){ width="80%" }
 /// caption
 Performance levels of Hopper FNA (forward pass) as of version `0.20.0`.
@@ -134,6 +142,10 @@ following functions in your code.
 
 - [x] Causal masking
 - [x] Variable length with sequence-packed format
+
+**FNA-specific features**
+- [x] Variable length / size with sequence-packed format (experimental)
+- [x] Variable parameters for variable length use cases (experimental)
 
 ![Blackwell FNA performance sample](assets/blackwell-fna-perf.png){ width="80%" }
 /// caption
@@ -190,6 +202,10 @@ following functions in your code.
 
 - [ ] Causal masking
 - [ ] Variable length with sequence-packed format
+
+**FNA-specific features**
+- [ ] Variable length / size with sequence-packed format (experimental)
+- [ ] Variable parameters for variable length use cases (experimental)
 
 This backend is PyTorch-native, and supports some non-NVIDIA devices as well (CPU and ROCm).
 It is based on 

@@ -28,6 +28,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/kernel_hardware_info.h"
 
+#include "natten/cuda/fmha_hopper/collective/fmha_varlen.hpp"
 #include "natten/cuda/fna_hopper/collective/fna_fusion.hpp"
 #include "natten/cuda/fna_hopper/device/fna_sm90.hpp"
 #include "natten/cuda/fna_hopper/kernel/fna_kernel_builder.hpp"
@@ -51,7 +52,8 @@ template <
     class QTileShape,
     class KVTileShape,
     class TileShape,
-    natten::cuda::hopper::HopperKernelSchedule KernelSchedule>
+    natten::cuda::hopper::HopperKernelSchedule KernelSchedule,
+    bool kIsVarlen>
 struct KernelForward {
   static_assert(
       rank(QTileShape{}) == 1 || rank(QTileShape{}) == 2 ||
@@ -69,9 +71,14 @@ struct KernelForward {
   using ElementAccumulatorQK = float;
   using ElementAccumulatorPV = float;
   using ElementOut = Element;
+  using VariableLength = cutlass::fmha::collective::VariableLength;
 
   // B H Q K D
-  using ProblemShapeType = cute::tuple<int, int, int, int, int>;
+  using ProblemShapeRegular = cute::tuple<int, int, int, int, int>;
+  using ProblemShapeVarlen =
+      cute::tuple<int, int, VariableLength, VariableLength, int>;
+  using ProblemShapeType =
+      std::conditional_t<kIsVarlen, ProblemShapeVarlen, ProblemShapeRegular>;
 
   using StrideQ = cute::tuple<int, _1, cute::tuple<int64_t, int>>; // Q D (B H)
   using StrideK = cute::tuple<int, _1, cute::tuple<int64_t, int>>; // K D (B H)
@@ -112,10 +119,16 @@ struct KernelForward {
           StrideQ,
           StrideK,
           StrideV,
-          NeighborhoodAttentionMaskSm90<Causal>,
+          NeighborhoodAttentionMaskSm90<QTileShape, KVTileShape, Causal>,
           DispatchPolicy>::Kernel>;
 
   using Arguments = typename Operation::Arguments;
+
+  // NOTE (ahassani): I really don't like this -- but I don't want to duplicate
+  // the kernel layer for FNA just so we expose this from the collective layer.
+  // We don't have this problem in backward because there's no collective
+  // builder, it's all built in one place.
+  using BatchMap = cute::tuple<int32_t, int32_t>;
 
   Operation op;
 
@@ -130,46 +143,89 @@ struct KernelForward {
       int seqlen_KV,
       int heads,
       int dim,
+      float attn_scale,
+      // fna / fusion parameters
       NADim q_shape,
       NADim kv_shape,
       NADim qkv_shape,
       NADim window_size,
       NADim stride,
       NADim dilation,
-      int device_id,
-      float attn_scale) {
-    auto dim_aligned = cutlass::round_up(dim, 8); // alignment
-    ProblemShapeType problem_shape = ProblemShapeType{
+      // varlen parameters
+      int max_seqlen_Q,
+      int max_seqlen_KV,
+      void* ptr_cumulative_seqlen_Q,
+      void* ptr_cumulative_seqlen_KV,
+      void* ptr_token_layouts,
+      void* ptr_batch_map,
+      // var-param parameters
+      void* ptr_window_sizes,
+      void* ptr_strides,
+      void* ptr_dilations,
+      // init/launch params
+      int device_id) {
+    auto problem_shape_regular = cute::make_tuple(
         batch,
         heads,
         seqlen_Q,
         seqlen_KV,
-        dim_aligned,
-    };
+        // head dim is always either 32, 64, 128, or 256 in natten, but it
+        // should always meet the 128-bit alignment constraint
+        dim);
+
+    ProblemShapeType problem_shape_launch;
+    decltype(problem_shape_regular) problem_shape_memory;
+
+    if constexpr (kIsVarlen) {
+      problem_shape_memory = problem_shape_regular;
+      get<0>(problem_shape_memory) = 1;
+
+      get<0>(problem_shape_launch) = get<0>(problem_shape_regular);
+      get<1>(problem_shape_launch) = get<1>(problem_shape_regular);
+
+      get<2>(problem_shape_launch) = VariableLength{
+          max_seqlen_Q,
+          reinterpret_cast<int*>(ptr_cumulative_seqlen_Q),
+          seqlen_Q};
+      get<3>(problem_shape_launch) = VariableLength{
+          max_seqlen_KV,
+          reinterpret_cast<int*>(ptr_cumulative_seqlen_KV),
+          seqlen_KV};
+      get<4>(problem_shape_launch) = get<4>(problem_shape_regular);
+    } else {
+      problem_shape_memory = problem_shape_regular;
+      problem_shape_launch = problem_shape_regular;
+    }
+
+    int B = size<0>(problem_shape_memory);
 
     // heads last profile, with torch's "contiguous layout"
     // shape: (batch, heads, seqlen, dim)
     // stride: (dim*heads*seqlen, dim*heads, dim, 1)
     auto stride_Q = make_stride(
-        heads * dim_aligned,
+        heads * dim,
         _1{},
         make_stride(
-            static_cast<int64_t>(heads * dim_aligned) *
-                static_cast<int64_t>(seqlen_Q),
-            dim_aligned));
+            B == 1 ? 0
+                   : static_cast<int64_t>(heads * dim) *
+                    static_cast<int64_t>(seqlen_Q),
+            dim));
     auto stride_O = stride_Q;
     auto stride_K = make_stride(
-        heads * dim_aligned,
+        heads * dim,
         _1{},
         make_stride(
-            static_cast<int64_t>(heads * dim_aligned) *
-                static_cast<int64_t>(seqlen_KV),
-            dim_aligned));
+            B == 1 ? 0
+                   : static_cast<int64_t>(heads * dim) *
+                    static_cast<int64_t>(seqlen_KV),
+            dim));
     auto stride_V = stride_K;
     auto stride_LSE = make_stride(
         heads,
         make_stride(
-            static_cast<int64_t>(heads) * static_cast<int64_t>(seqlen_Q),
+            B == 1
+                ? 0
+                : static_cast<int64_t>(heads) * static_cast<int64_t>(seqlen_Q),
             _1{}));
 
     cutlass::KernelHardwareInfo hw_info;
@@ -179,7 +235,7 @@ struct KernelForward {
             hw_info.device_id);
 
     Arguments arguments{
-        problem_shape,
+        problem_shape_launch,
         {reinterpret_cast<Element*>(ptr_Q),
          stride_Q,
          reinterpret_cast<Element*>(ptr_K),
@@ -187,12 +243,20 @@ struct KernelForward {
          reinterpret_cast<Element*>(ptr_V),
          stride_V,
          attn_scale,
+         //
          q_shape,
          kv_shape,
          qkv_shape,
          window_size,
          stride,
-         dilation},
+         dilation,
+         // varlen (var-sized)
+         reinterpret_cast<NADim*>(ptr_token_layouts),
+         reinterpret_cast<BatchMap*>(ptr_batch_map),
+         // var-param
+         reinterpret_cast<NADim*>(ptr_window_sizes),
+         reinterpret_cast<NADim*>(ptr_strides),
+         reinterpret_cast<NADim*>(ptr_dilations)},
         {reinterpret_cast<Element*>(ptr_O),
          stride_O,
          reinterpret_cast<ElementAccumulatorPV*>(ptr_LSE),

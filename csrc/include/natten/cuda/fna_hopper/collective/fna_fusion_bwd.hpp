@@ -228,26 +228,27 @@ CUTE_HOST_DEVICE auto get_bwd_window_end(
 
 // Backward pass mask
 // Does not allow extra KV fusion
-template <class Causal_>
+template <class QTileShape_, class KVTileShape_, class Causal_>
 struct NeighborhoodAttentionBackwardMaskSm90 {
+  using QTileShape = QTileShape_;
+  using KVTileShape = KVTileShape_;
   using Causal = Causal_;
   static_assert(rank(Causal{}) >= 1 && rank(Causal{}) < 4);
+  static_assert(rank(Causal{}) == rank(QTileShape{}));
+  static_assert(rank(Causal{}) == rank(KVTileShape{}));
 
   // Identical to NeighborhoodAttentionMask::correct_qkv_shape
   // QKV shape Correction
   // Only if dilated and input size % dilation != 0
   // NOTE: every warp role has to execute this before using the mask!!
-  template <class ProblemShape, class BlkCoord, class QKVShape, class Dilation>
+  template <class QKVShape, class Dilation>
   CUTLASS_DEVICE auto correct_qkv_shape(
-      ProblemShape const& problem_shape,
       QKVShape const& qkv_shape, // this is pre-padding, pre-token permute, just
                                  // the original shape of the sequence mode in
                                  // the self attention
-      BlkCoord const& blk_coord,
+      int32_t batch_idx,
       Dilation const& dilation,
       int num_dilation_groups) {
-    auto batch_idx = get<2, 0>(blk_coord);
-
     auto dilation_group_idx = batch_idx % num_dilation_groups;
     auto dilation_group_crd = idx2crd(dilation_group_idx, dilation);
 
@@ -256,29 +257,27 @@ struct NeighborhoodAttentionBackwardMaskSm90 {
   }
 
   // Unlike in forward pass, trip counts are over Q tiles and not KV tiles.
-  template <
-      class BlkCoord,
-      class MultiDimTileShape,
-      class QKVShape,
-      class NAParams>
+  template <class BlkCoord, class QKVShape, class NAParams>
   CUTLASS_DEVICE auto get_trip_count(
       BlkCoord const& blk_coord,
-      MultiDimTileShape const& multi_dim_tile_shapes,
       QKVShape const& kv_shape,
       QKVShape const& qkv_shape,
       NAParams const& na_params) {
-    auto [q_tile_shape, kv_tile_shape] = multi_dim_tile_shapes;
-
     auto [window_size, window_left, window_right, stride, stride_group_offset] =
         na_params;
 
-    auto kv_tiled = ceil_div(kv_shape, kv_tile_shape);
+    auto kv_tiled = ceil_div(kv_shape, KVTileShape{});
 
     // Map KV index back to coord
     auto kv_tile_coord = idx2crd(static_cast<int>(get<1>(blk_coord)), kv_tiled);
-    auto kv_coord = tuple_mul(kv_tile_coord, kv_tile_shape);
+    auto kv_coord = tuple_mul(kv_tile_coord, KVTileShape{});
+    // early exit if OOB tile (varlen + dilation)
+    if (elem_leq(qkv_shape, kv_coord)) {
+      auto z = repeat_like(qkv_shape, 0);
+      return make_tuple(z, z);
+    }
 
-    auto kv_tile_offset_last = idx2crd(size(kv_tile_shape) - 1, kv_tile_shape);
+    auto kv_tile_offset_last = idx2crd(size(KVTileShape{}) - 1, KVTileShape{});
     auto kv_coord_last = tuple_add(kv_coord, kv_tile_offset_last);
 
     // q start and end instead of kv like in forward pass
@@ -308,61 +307,54 @@ struct NeighborhoodAttentionBackwardMaskSm90 {
         stride,
         qkv_shape);
 
-    auto q_start = floor_tuple(q_start_actual, q_tile_shape);
-    auto q_end = ceil_tuple(q_end_actual, q_tile_shape);
+    auto q_start = floor_tuple(q_start_actual, QTileShape{});
+    auto q_end = ceil_tuple(q_end_actual, QTileShape{});
 
     auto q_diff = tuple_sub(q_end, q_start);
-    auto q_diff_tiles = ceil_div(q_diff, q_tile_shape);
+    auto q_diff_tiles = ceil_div(q_diff, QTileShape{});
 
     return make_tuple(q_start, q_diff_tiles);
   }
 
-  template <
-      class Acc,
-      class IndexKQ,
-      class MultiDimTileShape,
-      class QKVShape,
-      class NAParams>
+  template <class Acc, class IndexKQ, class QKVShape, class NAParams>
   CUTLASS_DEVICE void apply_mask(
       Acc& acc,
       IndexKQ const& index_kq,
-      MultiDimTileShape const& multi_dim_tile_shapes,
       QKVShape const& kv_shape,
       QKVShape const& qkv_shape,
       NAParams const& na_params,
       QKVShape const& blk_q_offset,
       QKVShape const& q_diff_tiles) {
-    auto [q_tile_shape, kv_tile_shape] = multi_dim_tile_shapes;
     auto [window_size, window_left, window_right, stride, stride_group_offset] =
         na_params;
 
-    auto kv_tiled = ceil_div(kv_shape, kv_tile_shape);
+    auto kv_tiled = ceil_div(kv_shape, KVTileShape{});
 
     auto [kv_idx_first, q_idx_first] = index_kq(0);
 
     // KV coord remap
-    int kv_tile_idx = kv_idx_first / size(kv_tile_shape);
-    int kv_tile_res = kv_idx_first % size(kv_tile_shape);
+    int kv_tile_idx = kv_idx_first / size(KVTileShape{});
+    int kv_tile_res = kv_idx_first % size(KVTileShape{});
 
     auto kv_tile_coord = idx2crd(kv_tile_idx, kv_tiled);
-    auto kv_tile_offset = idx2crd(kv_tile_res, kv_tile_shape);
+    auto kv_tile_offset = idx2crd(kv_tile_res, KVTileShape{});
     auto kv_thread_offset =
-        tuple_add(kv_tile_offset, tuple_mul(kv_tile_coord, kv_tile_shape));
+        tuple_add(kv_tile_offset, tuple_mul(kv_tile_coord, KVTileShape{}));
 
-    auto kv_ctr = make_identity_tensor(kv_tile_shape);
+    auto kv_ctr = make_identity_tensor(KVTileShape{});
     auto kv_ctr_offset = domain_offset(kv_thread_offset, kv_ctr);
 
     // Q coord remap
-    int q_tile_idx = q_idx_first / size(q_tile_shape);
-    int q_tile_res = q_idx_first % size(q_tile_shape);
+    int q_tile_idx = q_idx_first / size(QTileShape{});
+    int q_tile_res = q_idx_first % size(QTileShape{});
 
     auto q_tile_coord = idx2crd(q_tile_idx, q_diff_tiles);
-    auto q_tile_offset = idx2crd(q_tile_res, q_tile_shape);
+    auto q_tile_offset = idx2crd(q_tile_res, QTileShape{});
     auto q_thread_offset = tuple_add(
         q_tile_offset,
-        tuple_add(blk_q_offset, tuple_mul(q_tile_coord, q_tile_shape)));
+        tuple_add(blk_q_offset, tuple_mul(q_tile_coord, QTileShape{})));
 
-    auto q_ctr = make_identity_tensor(q_tile_shape);
+    auto q_ctr = make_identity_tensor(QTileShape{});
     auto q_ctr_offset = domain_offset(q_thread_offset, q_ctr);
 
     CUTLASS_PRAGMA_UNROLL
@@ -395,41 +387,33 @@ struct NeighborhoodAttentionBackwardMaskSm90 {
     }
   }
 
-  template <
-      class Acc,
-      class IndexKQ,
-      class MultiDimTileShape,
-      class QKVShape,
-      class NAParams>
+  template <class Acc, class IndexKQ, class QKVShape, class NAParams>
   CUTLASS_DEVICE void apply_padded_mask(
       Acc& acc,
       IndexKQ const& index_kq,
-      MultiDimTileShape const& multi_dim_tile_shapes,
       QKVShape const& qkv_shape,
       NAParams const& na_params,
       QKVShape const& blk_q_offset,
       QKVShape const& q_diff_tiles) {
-    auto [q_tile_shape, kv_tile_shape] = multi_dim_tile_shapes;
-
     // Q coord remap
     auto [_, q_idx_first] = index_kq(0);
-    int q_tile_idx = q_idx_first / size(q_tile_shape);
-    int q_tile_res = q_idx_first % size(q_tile_shape);
+    int q_tile_idx = q_idx_first / size(QTileShape{});
+    int q_tile_res = q_idx_first % size(QTileShape{});
 
     auto q_tile_coord = idx2crd(q_tile_idx, q_diff_tiles);
-    auto q_tile_offset = idx2crd(q_tile_res, q_tile_shape);
+    auto q_tile_offset = idx2crd(q_tile_res, QTileShape{});
     auto q_thread_offset = tuple_add(
         q_tile_offset,
-        tuple_add(blk_q_offset, tuple_mul(q_tile_coord, q_tile_shape)));
+        tuple_add(blk_q_offset, tuple_mul(q_tile_coord, QTileShape{})));
 
-    auto q_ctr = make_identity_tensor(q_tile_shape);
+    auto q_ctr = make_identity_tensor(QTileShape{});
     auto q_ctr_offset = domain_offset(q_thread_offset, q_ctr);
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < size(acc); i++) {
       auto [_, q_idx] = index_kq(i);
 
-      int iter_offset = q_idx - q_idx_first; // % size(kv_tile_shape);
+      int iter_offset = q_idx - q_idx_first; // % size(KVTileShape{});
       auto q_coord = q_ctr_offset(iter_offset);
 
       if (not is_within_bounds(q_coord, qkv_shape)) {
@@ -438,13 +422,5 @@ struct NeighborhoodAttentionBackwardMaskSm90 {
     }
   }
 };
-
-// Misc
-
-template <class NADim>
-CUTE_HOST_DEVICE constexpr auto get_bwd_stride_offset(NADim const& stride) {
-  return transform_leaf(
-      stride, [&](auto const& s) { return (s - (s / 2) - 1); });
-}
 
 } // namespace cutlass::fna::collective

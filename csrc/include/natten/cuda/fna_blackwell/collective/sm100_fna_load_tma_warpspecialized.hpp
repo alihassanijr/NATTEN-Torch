@@ -43,6 +43,7 @@
 namespace cutlass::fna::collective {
 
 using namespace cute;
+using namespace cutlass::fmha::collective;
 
 template <
     class Element,
@@ -61,9 +62,10 @@ template <
     class TileShape,
     class QTileShape,
     class KVTileShape,
-    class NADim>
+    class NADim,
+    bool IsVarlen>
 struct Sm100FnaLoadTmaWarpspecialized {
-  using MultiDimTileShape = cute::tuple<QTileShape, KVTileShape>;
+  using BatchMap = cute::tuple<int32_t, int32_t>;
 
   static_assert(
       size(QTileShape{}) == get<0>(TileShape{}),
@@ -88,13 +90,24 @@ struct Sm100FnaLoadTmaWarpspecialized {
     NADim window_size;
     NADim stride;
     NADim dilation;
+
+    // varlen (varsized)
+    NADim* token_layout_ptr;
+    BatchMap* batch_map_ptr;
+
+    // var-param
+    NADim* window_sizes_ptr;
+    NADim* strides_ptr;
+    NADim* dilations_ptr;
   };
 
   using TMA_Q = typename CollectiveMmaQK::Params::TMA_A;
   using TMA_K = typename CollectiveMmaQK::Params::TMA_B;
   using TMA_V = typename CollectiveMmaPV::Params::TMA_B;
 
-  struct Params {
+  struct ParamsStandard {
+    using NADimType = NADim;
+
     TMA_Q tma_load_q;
     TMA_K tma_load_k;
     TMA_V tma_load_v;
@@ -104,12 +117,33 @@ struct Sm100FnaLoadTmaWarpspecialized {
     cute::tuple<NADim, NADim, NADim, NADim>
         na_params; // win, win_left, win_right, stride
     bool is_fully_block_sparse;
-    bool has_kv_padding;
+    bool has_padding;
     NADim dilation;
     bool requires_qkv_fixup;
     bool is_dilated;
     int num_dilation_groups;
   };
+
+  struct ParamsVarlen {
+    using NADimType = NADim;
+
+    TMA_Q tma_load_q;
+    TMA_K tma_load_k;
+    TMA_V tma_load_v;
+    cute::tuple<NADim, NADim, NADim, NADim>
+        na_params; // win, win_left, win_right, stride
+    NADim dilation;
+    int num_dilation_groups;
+
+    NADim* token_layout_ptr;
+    BatchMap* batch_map_ptr;
+
+    NADim* window_sizes_ptr;
+    NADim* strides_ptr;
+    NADim* dilations_ptr;
+  };
+
+  using Params = cute::conditional_t<IsVarlen, ParamsVarlen, ParamsStandard>;
 
   template <class ProblemShape>
   static Params to_underlying_arguments(
@@ -122,7 +156,23 @@ struct Sm100FnaLoadTmaWarpspecialized {
     auto dQ = args.dQ;
     auto dK = args.dK;
     auto dV = args.dV;
-    auto problem_shape_qk = problem_shape;
+
+    using IntProblemShape =
+        cute::tuple<int, int, int, cute::tuple<cute::tuple<int, int>, int>>;
+
+    IntProblemShape problem_shape_qk;
+    if constexpr (is_variable_length_v<tuple_element_t<0, ProblemShape>>) {
+      auto cumulative_length_q = get<0>(problem_shape).cumulative_length;
+      auto cumulative_length_k = get<1>(problem_shape).cumulative_length;
+      if (cumulative_length_q != nullptr && cumulative_length_k != nullptr) {
+        get<0>(problem_shape_qk) = get<0>(problem_shape).total_length;
+        get<1>(problem_shape_qk) = get<1>(problem_shape).total_length;
+        get<2>(problem_shape_qk) = get<2>(problem_shape);
+        get<3>(problem_shape_qk) = get<3>(problem_shape);
+      }
+    } else {
+      problem_shape_qk = problem_shape;
+    }
 
     auto params_qk = CollectiveMmaQK::to_underlying_arguments(
         problem_shape_qk,
@@ -148,27 +198,45 @@ struct Sm100FnaLoadTmaWarpspecialized {
     auto window_left = get_window_left(args.window_size);
     auto window_right = get_window_right(args.window_size);
 
-    bool requires_qkv_fixup = not evenly_divides(args.qkv_shape, args.dilation);
-
-    return Params{
-        params_qk.tma_load_a,
-        params_qk.tma_load_b,
-        params_pv.tma_load_b,
-        args.qkv_shape,
-        args.q_shape,
-        args.kv_shape,
-        make_tuple(args.window_size, window_left, window_right, args.stride),
-        fully_block_sparse<typename Mask::Causal>(
-            args.qkv_shape,
-            args.window_size,
-            args.stride,
-            QTileShape{},
-            KVTileShape{}),
-        /* has_kv_padding */ not evenly_divides(args.qkv_shape, KVTileShape{}),
-        args.dilation,
-        requires_qkv_fixup,
-        is_dilated(args.dilation),
-        size(args.dilation)};
+    if constexpr (not IsVarlen) {
+      return ParamsStandard{
+          params_qk.tma_load_a,
+          params_qk.tma_load_b,
+          params_pv.tma_load_b,
+          args.qkv_shape,
+          args.q_shape,
+          args.kv_shape,
+          make_tuple(args.window_size, window_left, window_right, args.stride),
+          /* is_fully_block_sparse */
+          fully_block_sparse<typename Mask::Causal>(
+              args.qkv_shape,
+              args.window_size,
+              args.stride,
+              QTileShape{},
+              KVTileShape{}),
+          /* has_padding */
+          not evenly_divides(args.qkv_shape, KVTileShape{}),
+          /* dilation */ args.dilation,
+          /* requires_qkv_fixup */
+          not evenly_divides(args.qkv_shape, args.dilation),
+          /* is_dilated */ is_dilated(args.dilation),
+          /* num_dilation_groups */ size(args.dilation)};
+    } else {
+      return ParamsVarlen{
+          params_qk.tma_load_a,
+          params_qk.tma_load_b,
+          params_pv.tma_load_b,
+          make_tuple(args.window_size, window_left, window_right, args.stride),
+          /* dilation */ args.dilation,
+          /* num_dilation_groups */ size(args.dilation),
+          args.token_layout_ptr,
+          args.batch_map_ptr,
+          // var-param
+          args.window_sizes_ptr,
+          args.strides_ptr,
+          args.dilations_ptr,
+      };
+    }
   }
 
   CUTLASS_DEVICE
@@ -191,31 +259,32 @@ struct Sm100FnaLoadTmaWarpspecialized {
       typename PipelineKV::PipelineState& pipeline_kv_producer_state) {
     BlkCoord blk_coord_q = blk_coord_in;
     BlkCoord blk_coord_kv = blk_coord_in;
+    BlkCoord blk_coord_correction = blk_coord_in;
 
-    auto qkv_shape = params.qkv_shape;
-    if (params.requires_qkv_fixup) {
-      qkv_shape = Mask{}.correct_qkv_shape(
-          problem_shape,
-          params.qkv_shape,
-          blk_coord_in,
-          params.dilation,
-          params.num_dilation_groups);
-    } else if (params.is_dilated) {
-      qkv_shape = ceil_div(params.qkv_shape, params.dilation);
-    }
+    static_assert(
+        IsVarlen ==
+            is_variable_length_v<tuple_element_t<0, ParamsProblemShape>> &&
+        IsVarlen ==
+            is_variable_length_v<tuple_element_t<1, ParamsProblemShape>>);
 
-    auto [kv_start, num_tiles] = Mask{}.get_trip_count(
-        blk_coord_in,
-        MultiDimTileShape{},
-        params.q_shape,
-        qkv_shape,
-        params.na_params);
+    auto
+        [qkv_shape,
+         q_shape,
+         kv_shape,
+         na_params,
+         is_fully_block_sparse,
+         has_padding] =
+            update_params<IsVarlen, /* IsBackward = */ false, Mask>(
+                params, blk_coord_in, problem_shape);
+
+    auto [kv_start, num_tiles] =
+        Mask{}.get_trip_count(blk_coord_in, q_shape, qkv_shape, na_params);
 
     int mask_tile_count = size(num_tiles);
 
     auto kv_start_tile = ceil_div(kv_start, KVTileShape{});
 
-    auto kv_tiled = ceil_div(params.kv_shape, KVTileShape{});
+    auto kv_tiled = ceil_div(kv_shape, KVTileShape{});
     auto ctr = make_identity_tensor(num_tiles);
     auto ctr_offset = domain_offset(kv_start_tile, ctr);
 
@@ -241,6 +310,15 @@ struct Sm100FnaLoadTmaWarpspecialized {
 
     int q_offs_0 = 0;
 
+    if constexpr (is_variable_length_v<
+                      tuple_element_t<0, ParamsProblemShape>>) {
+      auto cumulative_length_q = get<0>(params_problem_shape).cumulative_length;
+      if (cumulative_length_q != nullptr) {
+        q_offs_0 = cumulative_length_q[get<2, 1>(blk_coord_q)];
+        get<2, 1>(blk_coord_q) = 0;
+      }
+    }
+
     Tensor mQ_qdl = domain_offset(
         make_coord(q_offs_0, _0{}, make_coord(_0{}, _0{})), mQ_qdl_p);
 
@@ -262,6 +340,15 @@ struct Sm100FnaLoadTmaWarpspecialized {
         params.tma_load_k.get_tma_tensor(select<1, 2, 3>(problem_shape));
 
     int kv_offs_0 = 0;
+
+    if constexpr (is_variable_length_v<
+                      tuple_element_t<1, ParamsProblemShape>>) {
+      auto cumulative_length = get<1>(params_problem_shape).cumulative_length;
+      if (cumulative_length != nullptr) {
+        kv_offs_0 = cumulative_length[get<2, 1>(blk_coord_kv)];
+        get<2, 1>(blk_coord_kv) = 0;
+      }
+    }
 
     Tensor mK_kdl = domain_offset(
         make_coord(kv_offs_0, _0{}, make_coord(_0{}, _0{})), mK_kdl_p);

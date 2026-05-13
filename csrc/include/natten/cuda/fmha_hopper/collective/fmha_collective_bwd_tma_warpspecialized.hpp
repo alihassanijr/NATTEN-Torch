@@ -388,7 +388,7 @@ struct FmhaBwdMainloopTmaWarpSpecializedSm90 {
     //
     // If we pad those, we would have to modify the residual mask as well.
     //
-    return true && (get<4>(problem_size) <= get<2>(TileShape{})) &&
+    return (get<4>(problem_size) <= get<2>(TileShape{})) &&
         ((get<4>(problem_size) % Alignment) == 0)
         /*&& ((get<2>(problem_size) % Alignment) == 0)*/;
   }

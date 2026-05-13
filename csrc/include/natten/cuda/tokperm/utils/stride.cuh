@@ -58,6 +58,24 @@ struct StrideHelper {
 
     return stride;
   }
+
+  using StrideTypeHeadless =
+      decltype(append(utils::make_tuple_type<Rank - 1, int64_t>{}, _1{}));
+  CUTE_HOST_DEVICE static constexpr StrideTypeHeadless make_headless_stride(
+      Shape const& shape) {
+    StrideTypeHeadless stride;
+
+    get<Rank - 1>(stride) = _1{};
+    get<Rank - 2>(stride) = get<Rank - 1>(shape);
+    cute::for_each(cute::make_range<0, Rank - 1>{}, [&](auto i) {
+      static_assert(i < Rank - 1);
+      get<Rank - i - 2>(stride) =
+          static_cast<int64_t>(get<Rank - i - 1>(shape)) *
+          get<Rank - i - 1>(stride);
+    });
+
+    return stride;
+  }
 };
 
 } // namespace detail
@@ -68,6 +86,16 @@ CUTE_HOST_DEVICE static constexpr auto make_torch_contiguous_stride(
   auto flattened_shape = cute::flatten(shape);
   auto flattened_stride =
       detail::StrideHelper<decltype(flattened_shape)>::make_stride(
+          flattened_shape);
+  return cute::unflatten(flattened_stride, shape);
+}
+
+template <class Shape>
+CUTE_HOST_DEVICE static constexpr auto make_torch_contiguous_stride_headless(
+    Shape const& shape) {
+  auto flattened_shape = cute::flatten(shape);
+  auto flattened_stride =
+      detail::StrideHelper<decltype(flattened_shape)>::make_headless_stride(
           flattened_shape);
   return cute::unflatten(flattened_stride, shape);
 }
