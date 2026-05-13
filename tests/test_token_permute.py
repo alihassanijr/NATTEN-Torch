@@ -26,8 +26,6 @@ import random
 import unittest
 
 import torch
-from natten.token_permute import token_permute_operation, token_unpermute_operation
-from natten.utils.testing import skip_if_cuda_is_not_supported, supports_float16
 from natten._environment import _NUM_RAND_SWEEP_TESTS as RAND_SWEEP_TESTS
 from natten.token_permute import (
     generate_tokperm_varlen_metadata,
@@ -36,7 +34,6 @@ from natten.token_permute import (
     token_unpermute_operation,
     token_unpermute_varlen_operation,
 )
-from natten.utils import log
 from natten.utils.testing import (
     skip_if_cuda_is_not_supported,
     skip_if_not_running_extended_tests,

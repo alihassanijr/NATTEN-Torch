@@ -206,6 +206,7 @@ void blackwell_fna_generic_forward(
         "Blackwell FNA forward with FP16/BF16 requires head dims that are multiples of 8 (minimum 8), got ",
         dim,
         ".");
+  }
 
   if (not is_varlen) {
     TORCH_CHECK(

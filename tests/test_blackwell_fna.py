@@ -32,6 +32,7 @@ from natten.backends.configs.cutlass_blackwell import (
     get_all_backward_configs,
     get_all_forward_configs,
 )
+from natten.utils.dtype import is_fp8
 from natten.utils.testing import (
     skip_if_blackwell_kernels_not_supported,
     skip_if_libnatten_is_not_supported,

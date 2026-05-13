@@ -40,6 +40,7 @@ from natten.backends.configs.cutlass_hopper import (
 from natten.context import is_flex_compile_allowed, is_flex_compile_backprop_allowed
 from natten.utils.checks import fmha_tensor_checks, log_or_raise_error, na_tensor_checks
 from natten.utils.device import get_device_cc, is_cpu, is_cuda, is_rocm
+from natten.utils.dtype import is_fp8
 
 ### Blackwell FMHA/FNA
 
@@ -97,13 +98,6 @@ def can_run_cutlass_blackwell_fmha(
             "Can't run Blackwell FMHA; it does not support different head dims for QK and V, "
             f"got {head_dim=}, {head_dim_v=}.",
             exception=ValueError,
-        )
-        return False
-
-    if head_dim not in BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS:
-        target_fn(
-            f"Can't run Blackwell FMHA; it only supports these head dims for now: {BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS}.",
-            exception=NotImplementedError,
         )
         return False
 
@@ -317,12 +311,29 @@ def can_run_cutlass_blackwell_fna_varlen(
         )
         return False
 
-    if head_dim not in BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS:
+    if head_dim > 128:
         target_fn(
-            f"Can't run Varlen Blackwell FNA; it only supports these head dims for now: {BLACKWELL_FMHA_SUPPORTED_HEAD_DIMS}.",
+            f"Can't run Blackwell FNA; maximum supported head dim is 128, got {head_dim}.",
             exception=NotImplementedError,
         )
         return False
+
+    if is_fp8(dtype):
+        if head_dim < 16 or head_dim % 16 != 0:
+            target_fn(
+                "Can't run Blackwell FNA; FP8 requires head dims that are multiples of 16 "
+                f"(minimum 16), got {head_dim}.",
+                exception=NotImplementedError,
+            )
+            return False
+    else:
+        if head_dim < 8 or head_dim % 8 != 0:
+            target_fn(
+                "Can't run Blackwell FNA; FP16 and BF16 require head dims that are multiples "
+                f"of 8 (minimum 8), got {head_dim}.",
+                exception=NotImplementedError,
+            )
+            return False
 
     return True
 
