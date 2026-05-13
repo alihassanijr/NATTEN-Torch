@@ -175,12 +175,6 @@ def _verify_variable_parameters(
         parameter_name="dilation_list",
     )
 
-    # NOTE (ahassani, 05/12/2026): this was a nice optimization, but it incurs recompiles :(
-    # We basically made it so that if kernel size was constant across different batch entries that
-    # instead of the tensor we'd just set the parameter, that way the kernel wouldn't have to load
-    # it from gmem. We can still do this if we enforce a contract where if kernel size is some
-    # negative or invalid value, we look at the tensor, but I don't have time for that....
-
     kernel_size_list_out: list | None = [] if kernel_size_list is not None else None
     stride_list_out: list | None = [] if stride_list is not None else None
     dilation_list_out: list | None = [] if dilation_list is not None else None
@@ -223,6 +217,11 @@ def _verify_variable_parameters(
             assert dilation_list_out is not None
             dilation_list_out.append(dilation_)
 
+    # NOTE (ahassani, 05/12/2026): this was a nice optimization, but it incurs recompiles :(
+    # We basically made it so that if kernel size was constant across different batch entries that
+    # instead of the tensor we'd just set the parameter, that way the kernel wouldn't have to load
+    # it from gmem. We can still do this if we enforce a contract where if kernel size is some
+    # negative or invalid value, we look at the tensor, but I don't have time for that....
     # if kernel_size_list_out is not None and all(
     #    k == kernel_size_list_out[0] for k in kernel_size_list_out
     # ):
