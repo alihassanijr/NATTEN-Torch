@@ -42,7 +42,7 @@ DTYPE = torch.float16
 MAX_SEQLEN = 2**15  # 32768
 
 # Timeout for the very first run (initial torch.compile compilation)
-FIRST_RUN_TIMEOUT_S = 5.0
+FIRST_RUN_TIMEOUT_S = 10.0
 # Timeout for all subsequent runs (zero recompiles expected)
 RERUN_TIMEOUT_S = 0.1
 

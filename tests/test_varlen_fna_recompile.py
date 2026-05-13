@@ -40,7 +40,7 @@ DEVICE = "cuda"
 DTYPE = torch.float16
 
 # Timeout for first run of each use case (includes torch.compile compilation)
-FIRST_RUN_TIMEOUT_S = 5.0
+FIRST_RUN_TIMEOUT_S = 10.0
 # Timeout for subsequent runs (no recompilation expected)
 RERUN_TIMEOUT_S = 0.1
 

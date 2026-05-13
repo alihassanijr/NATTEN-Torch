@@ -181,12 +181,9 @@ def _verify_variable_parameters(
     # it from gmem. We can still do this if we enforce a contract where if kernel size is some
     # negative or invalid value, we look at the tensor, but I don't have time for that....
 
-    # kernel_size_list_out: list | None = [] if kernel_size_list is not None else None
-    # stride_list_out: list | None = [] if stride_list is not None else None
-    # dilation_list_out: list | None = [] if dilation_list is not None else None
-    kernel_size_list_out = []  # type: ignore[var-annotated]
-    stride_list_out = []  # type: ignore[var-annotated]
-    dilation_list_out = []  # type: ignore[var-annotated]
+    kernel_size_list_out: list | None = [] if kernel_size_list is not None else None
+    stride_list_out: list | None = [] if stride_list is not None else None
+    dilation_list_out: list | None = [] if dilation_list is not None else None
 
     for b in range(batch_size):
         kernel_size_ = kernel_size
