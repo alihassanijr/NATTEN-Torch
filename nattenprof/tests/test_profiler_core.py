@@ -30,41 +30,21 @@ from typing import List
 import pytest
 import torch
 from natten.utils import log
-from natten.utils.device import get_device_cc
 
 from nattenprof.engine import profile_op
 from nattenprof.ops import run_attn, run_na, run_sdpa
 from nattenprof.output import KernelResult
-from nattenprof.problem import AttentionProblem, NAProblem
+from nattenprof.problem import AttnProblem, NAProblem
 from nattenprof.tensors import InitMode, TensorPool
+from nattenprof.tests._skipif import (
+    skip_no_blackwell,
+    skip_no_cuda,
+    skip_no_hopper,
+    skip_no_libnatten,
+)
 from nattenprof.trace import KernelType
 
 logger = log.get_logger("nattenprof_tests")
-
-HAS_CUDA = torch.cuda.is_available()
-skip_no_cuda = pytest.mark.skipif(not HAS_CUDA, reason="CUDA not available")
-
-
-def _get_cc():
-    if not HAS_CUDA:
-        return 0
-    return get_device_cc()
-
-
-skip_no_hopper = pytest.mark.skipif(
-    not HAS_CUDA or _get_cc() != 90,
-    reason="Hopper kernels require SM90",
-)
-
-skip_no_blackwell = pytest.mark.skipif(
-    not HAS_CUDA or _get_cc() not in (100, 103),
-    reason="Blackwell kernels require SM100 or SM103",
-)
-
-skip_no_libnatten = pytest.mark.skipif(
-    not HAS_CUDA,
-    reason="Requires libnatten + CUDA",
-)
 
 
 def _setup():
@@ -75,11 +55,9 @@ def _setup():
 
 
 def _make_pool(problem, heads_last=True, requires_grad=False):
-    shapes = (
-        problem.get_tensor_shapes(heads_last=heads_last)
-        if isinstance(problem, AttentionProblem)
-        else problem.get_tensor_shapes()
-    )
+    if isinstance(problem, AttnProblem):
+        problem.heads_last = heads_last
+    shapes = problem.get_tensor_shapes()
     return TensorPool(
         shapes=shapes,
         dtype=problem.dtype,
@@ -388,7 +366,7 @@ def test_na_1d_cutlass_fna_bwd():
 
 @skip_no_hopper
 def test_attn_hopper_fmha_fwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -431,7 +409,7 @@ def test_attn_hopper_fmha_fwd():
 
 @skip_no_hopper
 def test_attn_hopper_fmha_bwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -487,7 +465,7 @@ def test_attn_hopper_fmha_bwd():
 
 @skip_no_libnatten
 def test_attn_cutlass_fmha_fwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -529,7 +507,7 @@ def test_attn_cutlass_fmha_fwd():
 
 @skip_no_libnatten
 def test_attn_cutlass_fmha_bwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -583,7 +561,7 @@ def test_attn_cutlass_fmha_bwd():
 
 @skip_no_cuda
 def test_sdpa_cudnn_fwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -623,7 +601,7 @@ def test_sdpa_cudnn_fwd():
 
 @skip_no_cuda
 def test_sdpa_cudnn_bwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -673,7 +651,7 @@ def test_sdpa_cudnn_bwd():
 
 @skip_no_cuda
 def test_sdpa_fav2_fwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -871,7 +849,7 @@ def test_na_1d_blackwell_fna_bwd():
 
 @skip_no_blackwell
 def test_attn_blackwell_fmha_fwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,
@@ -913,7 +891,7 @@ def test_attn_blackwell_fmha_fwd():
 
 @skip_no_blackwell
 def test_attn_blackwell_fmha_bwd():
-    problem = AttentionProblem(
+    problem = AttnProblem(
         batch_size=1,
         heads=1,
         heads_kv=1,

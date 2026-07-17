@@ -66,6 +66,35 @@ def format_time_us(time_us: float) -> str:
     return f"{time_us:.3f}us"
 
 
+def format_section(
+    header: str, segments: List[str], indent: str = "  ", width: int = 90
+) -> str:
+    """Pretty-print a section: 'header:\\n  a, b, c\\n  d, e' with content-driven wrapping.
+
+    Segments are comma-joined onto as few lines as possible, starting a new
+    indented line when adding the next segment would exceed `width`.
+    Returns just the header if segments is empty.
+    """
+    if not segments:
+        return header
+
+    lines = []
+    cur: List[str] = []
+    cur_len = len(indent)
+    for seg in segments:
+        extra = 2 if cur else 0  # ", "
+        if cur and cur_len + extra + len(seg) > width:
+            lines.append(indent + ", ".join(cur))
+            cur = [seg]
+            cur_len = len(indent) + len(seg)
+        else:
+            cur.append(seg)
+            cur_len += extra + len(seg)
+    if cur:
+        lines.append(indent + ", ".join(cur))
+    return header + "\n" + "\n".join(lines)
+
+
 # ---- Data classes ----
 
 
@@ -192,7 +221,7 @@ def get_metadata() -> Dict[str, str]:
         import natten
 
         meta["natten_version"] = natten.__version__
-    except Exception:
+    except (ImportError, AttributeError):
         pass
     return meta
 
@@ -203,7 +232,7 @@ def get_metadata() -> Dict[str, str]:
 def get_terminal_width() -> int:
     try:
         return shutil.get_terminal_size().columns
-    except Exception:
+    except (OSError, AttributeError):
         return 120
 
 

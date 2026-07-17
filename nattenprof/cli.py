@@ -414,35 +414,6 @@ def _build_sdpa_parser(subparsers, parent):
     return sdpa
 
 
-def _build_batch_parser(subparsers, parent):
-    batch = subparsers.add_parser(
-        "batch",
-        help="Batch mode: run from JSON config file.",
-        parents=[parent],
-    )
-
-    batch.add_argument(
-        "--input",
-        type=str,
-        required=True,
-        help="Path to JSON input config file.",
-    )
-    batch.add_argument(
-        "--output",
-        type=str,
-        required=True,
-        help="Path to JSON output results file.",
-    )
-    batch.add_argument(
-        "--print",
-        action="store_true",
-        dest="print_tables",
-        help="Also print tables to terminal while running.",
-    )
-
-    return batch
-
-
 def get_args():
     parent = _make_shared_parent()
 
@@ -454,7 +425,6 @@ def get_args():
     _build_na_parser(subparsers, parent)
     _build_attn_parser(subparsers, parent)
     _build_sdpa_parser(subparsers, parent)
-    _build_batch_parser(subparsers, parent)
 
     args = parser.parse_args()
 

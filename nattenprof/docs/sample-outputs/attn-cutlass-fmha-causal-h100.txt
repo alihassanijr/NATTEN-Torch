@@ -1,27 +1,32 @@
-Use case:
-  batch=1, heads=1, heads_kv=1, dim=128, dim_value=128
-  seqlen_q=1024, seqlen_kv=1024, is_causal=True
-  dtype=bf16, backend=cutlass-fmha
+Problem:
+  batch=1, heads=1, heads_kv=1, dim=128, dim_value=128, seqlen_q=1024, seqlen_kv=1024
+  is_causal=True, dtype=bf16
+
+Performance knobs:
+  fmha_backend=cutlass-fmha, q_tile_size=64, kv_tile_size=64, backward_q_tile_size=64
+  backward_kv_tile_size=64
+
+Profiler knobs:
   warmup_steps=10, profiling_steps=1
 
                              Breakdown                              
 ┏━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┓
 ┃ Namespace ┃ Category ┃ Arch ┃  Operation   ┃ # calls ┃  Runtime  ┃
 ┡━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━┩
-│  CUTLASS  │ AttnFwd  │ Sm80 │ FMHAForward  │    1    │ 73.631us  │
-│  CUTLASS  │ AttnBwd  │ Sm80 │ FMHABackward │    1    │ 207.262us │
-│  CUTLASS  │ AttnBwd  │  -   │    SumOdO    │    1    │  2.720us  │
-│  PyTorch  │   Misc   │  -   │     Init     │    2    │  2.976us  │
+│  CUTLASS  │ AttnFwd  │ Sm80 │ FMHAForward  │    1    │ 73.153us  │
+│  CUTLASS  │ AttnBwd  │ Sm80 │ FMHABackward │    1    │ 208.609us │
+│  CUTLASS  │ AttnBwd  │  -   │    SumOdO    │    1    │  2.880us  │
+│  PyTorch  │   Misc   │  -   │     Init     │    2    │  2.977us  │
 ├───────────┼──────────┼──────┼──────────────┼─────────┼───────────┤
-│           │          │      │    Total     │         │ 286.589us │
+│           │          │      │    Total     │         │ 287.619us │
 └───────────┴──────────┴──────┴──────────────┴─────────┴───────────┘
         Summary         
 ┏━━━━━━━━━━┳━━━━━━━━━━━┓
 ┃ Category ┃  Runtime  ┃
 ┡━━━━━━━━━━╇━━━━━━━━━━━┩
-│ AttnFwd  │ 73.631us  │
-│ AttnBwd  │ 209.982us │
-│   Misc   │  2.976us  │
+│ AttnFwd  │ 73.153us  │
+│ AttnBwd  │ 211.489us │
+│   Misc   │  2.977us  │
 ├──────────┼───────────┤
-│  Total   │ 286.589us │
+│  Total   │ 287.619us │
 └──────────┴───────────┘

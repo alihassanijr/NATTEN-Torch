@@ -35,7 +35,7 @@ from torch import Tensor
 from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.nn.functional import scaled_dot_product_attention
 
-from nattenprof.problem import AttentionProblem, NAProblem
+from nattenprof.problem import AttnProblem, NAProblem
 
 SDPA_BACKEND_MAP = {
     "xformers": SDPBackend.EFFICIENT_ATTENTION,
@@ -44,23 +44,49 @@ SDPA_BACKEND_MAP = {
 }
 
 
+_FMHA_SIZE_KEYS = (
+    "q_tile_size",
+    "kv_tile_size",
+    "backward_q_tile_size",
+    "backward_kv_tile_size",
+)
+
+
 def run_na(
     tensors: Dict[str, Tensor],
     problem: NAProblem,
     disable_backward: bool = True,
     **kwargs,
 ):
-    """Run neighborhood_attention_generic with kwargs forwarded verbatim."""
+    """Run neighborhood_attention_generic with kwargs forwarded verbatim.
+
+    For self-attn NA, natten reroutes to the inner attention() call, which reads
+    its perf knobs from attention_kwargs only — top-level *_tile_shape args are
+    ignored in that branch. So we populate attention_kwargs with the FMHA size
+    fields and backend when self-attn is detected.
+    """
     from natten.functional import neighborhood_attention_generic
 
-    # Build attention_kwargs for the inner FMHA path from the same knobs.
-    attention_kwargs = {}
+    attention_kwargs: Dict = {}
     if kwargs.get("fmha_backend") is not None:
         attention_kwargs["backend"] = kwargs["fmha_backend"]
     if kwargs.get("kernel_schedule") is not None:
         attention_kwargs["kernel_schedule"] = kwargs["kernel_schedule"]
     if kwargs.get("torch_compile"):
         attention_kwargs["torch_compile"] = kwargs["torch_compile"]
+
+    if problem.is_self_attn():
+        for k in _FMHA_SIZE_KEYS:
+            if kwargs.get(k) is not None:
+                attention_kwargs[k] = kwargs[k]
+        if kwargs.get("run_persistent_kernel") is not None:
+            attention_kwargs["run_persistent_kernel"] = kwargs["run_persistent_kernel"]
+
+    # Top-level call of neighborhood_attention_generic doesn't accept FMHA size keys
+    # or fmha_backend — strip them. Shape keys stay (ignored for self-attn, used
+    # for real NA kernels otherwise).
+    drop = {"fmha_backend", *_FMHA_SIZE_KEYS}
+    forwarded = {k: v for k, v in kwargs.items() if k not in drop}
 
     out = neighborhood_attention_generic(
         tensors["q"],
@@ -73,7 +99,7 @@ def run_na(
         additional_keys=tensors.get("add_k"),
         additional_values=tensors.get("add_v"),
         attention_kwargs=attention_kwargs if attention_kwargs else None,
-        **{k: v for k, v in kwargs.items() if k != "fmha_backend"},
+        **forwarded,
     )
 
     if not disable_backward:
@@ -82,7 +108,7 @@ def run_na(
 
 def run_attn(
     tensors: Dict[str, Tensor],
-    problem: AttentionProblem,
+    problem: AttnProblem,
     disable_backward: bool = True,
     **kwargs,
 ):

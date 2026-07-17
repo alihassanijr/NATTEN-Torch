@@ -20,7 +20,6 @@ python -m nattenprof <subcommand> [options]
 | `na` | Neighborhood attention (1D, 2D, 3D) |
 | `attn` | NATTEN standard attention (FMHA backends) |
 | `sdpa` | PyTorch SDPA baseline (cuDNN, Flash Attention v2, xformers) |
-| `batch` | Batch mode: run multiple configs from a JSON file |
 
 ### Dependencies
 
@@ -159,14 +158,6 @@ python -m nattenprof na \
 | `-k`, `--seqlen-kv` | KV sequence length. Defaults to `--seqlen`. |
 | `--is-causal` | Enable causal mask. |
 | `--backend` | SDPA backend: `cudnn`, `fav2`, `xformers`. Default: `cudnn`. |
-
-### `batch` subcommand
-
-| Option | Description |
-|--------|-------------|
-| `--input` | **Required.** Path to JSON input config file. |
-| `--output` | **Required.** Path to JSON output results file. |
-| `--print` | Also print tables to terminal while running. |
 
 
 ## Dry Run
@@ -403,84 +394,6 @@ python -m nattenprof na \
 
 TODO: Add Blackwell examples with sample output includes (similar to Hopper examples above).
 
-
-## Batch Mode
-
-Run multiple configurations from a JSON file:
-
-```bash
-python -m nattenprof batch \
-    --input configs.json \
-    --output results.json \
-    --print
-```
-
-### Input format
-
-```json
-[
-    {
-        "op": "na",
-        "input_size": [256, 256],
-        "window_size": [80, 80],
-        "stride": [16, 16],
-        "dim": 128,
-        "heads": 24,
-        "dtype": "bf16",
-        "backend": "hopper-fna",
-        "q_tile": [16, 8],
-        "kv_tile": [16, 8]
-    },
-    {
-        "op": "attn",
-        "seqlen": 65536,
-        "dim": 128,
-        "heads": 24,
-        "dtype": "bf16",
-        "backend": "hopper-fmha"
-    },
-    {
-        "op": "sdpa",
-        "seqlen": 65536,
-        "dim": 128,
-        "heads": 24,
-        "dtype": "bf16",
-        "backend": "cudnn"
-    }
-]
-```
-
-### Output format
-
-JSON output includes metadata, per-kernel breakdowns, and timing:
-
-```json
-{
-    "metadata": {
-        "timestamp": "2026-04-15T12:00:00",
-        "gpu": "NVIDIA H100 80GB HBM3",
-        "torch_version": "2.11.0+cu129",
-        "natten_version": "0.21.6"
-    },
-    "results": [
-        {
-            "operation": "na",
-            "config": { ... },
-            "total_us": 10601.0,
-            "forward_us": 10601.0,
-            "backward_us": 0.0,
-            "breakdown": {
-                "attention_us": 7914.0,
-                "token_permute_us": 2687.0,
-                "reduction_us": 0.0,
-                "elementwise_us": 0.0,
-                "other_us": 0.0
-            },
-            "kernels": [ ... ]
-        }
-    ]
-}
-```
 
 ## Tensor Pool
 

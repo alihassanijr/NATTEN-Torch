@@ -1,32 +1,38 @@
-Use case:
-  batch=1, heads=1, heads_kv=1, dim=128, dim_value=128
-  input_size=(32768,), is_causal=(False,)
-  window_size=(2048,), stride=(1,), dilation=(1,)
-  dtype=bf16, backend=hopper-fna
+Problem:
+  batch=1, heads=1, heads_kv=1, dim=128, dim_value=128, input_size=(32768,)
+  window_size=(2048,), stride=(1,), dilation=(1,), is_causal=(False,), dtype=bf16
+
+Performance knobs:
+  fna_backend=hopper-fna, q_tile_shape=(128,), kv_tile_shape=(128,)
+  backward_q_tile_shape=(64,), backward_kv_tile_shape=(128,), fmha_backend=hopper-fmha
+  q_tile_size=128, kv_tile_size=128, backward_q_tile_size=64, backward_kv_tile_size=128
+  kernel_schedule=WS Cooperative
+
+Profiler knobs:
   warmup_steps=10, profiling_steps=1
 
                              Breakdown                              
 ┏━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┓
 ┃ Namespace ┃ Category  ┃ Arch ┃  Operation  ┃ # calls ┃  Runtime  ┃
 ┡━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━┩
-│  CUTLASS  │  AttnFwd  │ Sm90 │ FNAForward  │    1    │ 93.246us  │
-│  CUTLASS  │  AttnBwd  │ Sm90 │ FNABackward │    1    │ 411.066us │
-│  CUTLASS  │  AttnBwd  │ Sm90 │   SumOdO    │    1    │ 11.232us  │
-│  CUTLASS  │  AttnBwd  │ Sm90 │   Convert   │    1    │ 12.576us  │
-│  CUTLASS  │ MemoryOps │  -   │   TokPerm   │    9    │ 71.072us  │
-│  CUTLASS  │ MemoryOps │  -   │  TokUnperm  │    5    │ 35.168us  │
-│  PyTorch  │   Misc    │  -   │    Init     │    1    │  1.376us  │
+│  CUTLASS  │  AttnFwd  │ Sm90 │ FNAForward  │    1    │ 92.352us  │
+│  CUTLASS  │  AttnBwd  │ Sm90 │ FNABackward │    1    │ 422.976us │
+│  CUTLASS  │  AttnBwd  │ Sm90 │   SumOdO    │    1    │ 11.264us  │
+│  CUTLASS  │  AttnBwd  │ Sm90 │   Convert   │    1    │ 12.769us  │
+│  CUTLASS  │ MemoryOps │  -   │   TokPerm   │    9    │ 70.623us  │
+│  CUTLASS  │ MemoryOps │  -   │  TokUnperm  │    5    │ 35.071us  │
+│  PyTorch  │   Misc    │  -   │    Init     │    1    │  1.377us  │
 ├───────────┼───────────┼──────┼─────────────┼─────────┼───────────┤
-│           │           │      │    Total    │         │ 635.736us │
+│           │           │      │    Total    │         │ 646.432us │
 └───────────┴───────────┴──────┴─────────────┴─────────┴───────────┘
          Summary         
 ┏━━━━━━━━━━━┳━━━━━━━━━━━┓
 ┃ Category  ┃  Runtime  ┃
 ┡━━━━━━━━━━━╇━━━━━━━━━━━┩
-│  AttnFwd  │ 93.246us  │
-│  AttnBwd  │ 434.874us │
-│ MemoryOps │ 106.240us │
-│   Misc    │  1.376us  │
+│  AttnFwd  │ 92.352us  │
+│  AttnBwd  │ 447.009us │
+│ MemoryOps │ 105.694us │
+│   Misc    │  1.377us  │
 ├───────────┼───────────┤
-│   Total   │ 635.736us │
+│   Total   │ 646.432us │
 └───────────┴───────────┘

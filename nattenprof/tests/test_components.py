@@ -24,10 +24,10 @@
 """Component-level tests: symbol classification, tensor pool, problem classes.
 These do NOT require GPU (except TensorPool tests)."""
 
-import pytest
 import torch
 
-from nattenprof.problem import AttentionProblem, NAProblem
+from nattenprof.problem import AttnProblem, NAProblem, PerfConfig
+from nattenprof.tests._skipif import skip_no_cuda
 from nattenprof.trace import (
     _get_arch,
     _get_namespace,
@@ -39,10 +39,6 @@ from nattenprof.trace import (
     KERNEL_TYPE_TO_CATEGORY,
     KernelType,
 )
-
-HAS_CUDA = torch.cuda.is_available()
-skip_no_cuda = pytest.mark.skipif(not HAS_CUDA, reason="CUDA not available")
-
 
 # ---- Symbol classification ----
 
@@ -382,8 +378,10 @@ class TestFormatUseCase:
             dilation=(1, 1),
             is_causal=(False, True),
             dtype=torch.bfloat16,
+            perf=PerfConfig(fna_backend="hopper-fna"),
         )
-        s = p.format_use_case(backend="hopper-fna")
+        s = f"{p}\n{p.perf}"
+        assert "Problem:" in s
         assert "batch=2" in s
         assert "heads=8, heads_kv=2" in s
         assert "dim=128, dim_value=64" in s
@@ -393,10 +391,11 @@ class TestFormatUseCase:
         assert "dilation=(1, 1)" in s
         assert "is_causal=(False, True)" in s
         assert "dtype=bf16" in s
-        assert "backend=hopper-fna" in s
+        assert "Performance knobs:" in s
+        assert "fna_backend=hopper-fna" in s
 
     def test_attn_problem(self):
-        p = AttentionProblem(
+        p = AttnProblem(
             batch_size=1,
             heads=4,
             heads_kv=4,
@@ -406,12 +405,16 @@ class TestFormatUseCase:
             seqlen_kv=512,
             dtype=torch.float16,
             is_causal=True,
+            perf=PerfConfig(fmha_backend="cutlass-fmha"),
         )
-        s = p.format_use_case(backend="cutlass-fmha")
+        s = f"{p}\n{p.perf}"
+        assert "Problem:" in s
         assert "seqlen_q=1024" in s
         assert "seqlen_kv=512" in s
         assert "is_causal=True" in s
         assert "dtype=fp16" in s
+        assert "Performance knobs:" in s
+        assert "fmha_backend=cutlass-fmha" in s
 
     def test_na_tensor_shapes_gqa(self):
         p = NAProblem(
@@ -428,13 +431,13 @@ class TestFormatUseCase:
             dtype=torch.bfloat16,
         )
         shapes = p.get_tensor_shapes()
-        assert shapes["q"] == [2, 32, 8, 128]
-        assert shapes["k"] == [2, 32, 2, 128]
-        assert shapes["v"] == [2, 32, 2, 64]
-        assert shapes["d_out"] == [2, 32, 8, 64]
+        assert shapes["q"] == (2, 32, 8, 128)
+        assert shapes["k"] == (2, 32, 2, 128)
+        assert shapes["v"] == (2, 32, 2, 64)
+        assert shapes["d_out"] == (2, 32, 8, 64)
 
     def test_attn_tensor_shapes_heads_first(self):
-        p = AttentionProblem(
+        p = AttnProblem(
             batch_size=1,
             heads=4,
             heads_kv=2,
@@ -444,7 +447,8 @@ class TestFormatUseCase:
             seqlen_kv=200,
             dtype=torch.float16,
         )
-        shapes = p.get_tensor_shapes(heads_last=False)
-        assert shapes["q"] == [1, 4, 100, 64]
-        assert shapes["k"] == [1, 2, 200, 64]
-        assert shapes["v"] == [1, 2, 200, 32]
+        p.heads_last = False
+        shapes = p.get_tensor_shapes()
+        assert shapes["q"] == (1, 4, 100, 64)
+        assert shapes["k"] == (1, 2, 200, 64)
+        assert shapes["v"] == (1, 2, 200, 32)

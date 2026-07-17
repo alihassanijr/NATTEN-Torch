@@ -1,32 +1,39 @@
-Use case:
-  batch=1, heads=24, heads_kv=24, dim=128, dim_value=128
-  input_size=(30, 48, 80), is_causal=(False, False, False)
+Problem:
+  batch=1, heads=24, heads_kv=24, dim=128, dim_value=128, input_size=(30, 48, 80)
   window_size=(18, 24, 24), stride=(1, 1, 1), dilation=(1, 1, 1)
-  dtype=bf16, backend=hopper-fna
+  is_causal=(False, False, False), dtype=bf16
+
+Performance knobs:
+  fna_backend=hopper-fna, q_tile_shape=(2, 8, 8), kv_tile_shape=(2, 8, 8)
+  backward_q_tile_shape=(1, 8, 8), backward_kv_tile_shape=(2, 8, 8)
+  fmha_backend=hopper-fmha, q_tile_size=128, kv_tile_size=128, backward_q_tile_size=64
+  backward_kv_tile_size=128, kernel_schedule=WS Cooperative
+
+Profiler knobs:
   warmup_steps=10, profiling_steps=1
 
                              Breakdown                              
 ┏━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┓
 ┃ Namespace ┃ Category  ┃ Arch ┃  Operation  ┃ # calls ┃  Runtime  ┃
 ┡━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━┩
-│  CUTLASS  │  AttnFwd  │ Sm90 │ FNAForward  │    1    │ 72.802ms  │
-│  CUTLASS  │  AttnBwd  │ Sm90 │ FNABackward │    1    │ 249.821ms │
-│  CUTLASS  │  AttnBwd  │ Sm90 │   SumOdO    │    1    │ 670.108us │
-│  CUTLASS  │  AttnBwd  │ Sm90 │   Convert   │    1    │  1.039ms  │
-│  CUTLASS  │ MemoryOps │  -   │   TokPerm   │    9    │  6.044ms  │
-│  CUTLASS  │ MemoryOps │  -   │  TokUnperm  │    5    │  4.256ms  │
-│  PyTorch  │   Misc    │  -   │    Init     │    1    │  4.128us  │
+│  CUTLASS  │  AttnFwd  │ Sm90 │ FNAForward  │    1    │ 72.305ms  │
+│  CUTLASS  │  AttnBwd  │ Sm90 │ FNABackward │    1    │ 287.667ms │
+│  CUTLASS  │  AttnBwd  │ Sm90 │   SumOdO    │    1    │ 631.393us │
+│  CUTLASS  │  AttnBwd  │ Sm90 │   Convert   │    1    │ 973.984us │
+│  CUTLASS  │ MemoryOps │  -   │   TokPerm   │    9    │  5.850ms  │
+│  CUTLASS  │ MemoryOps │  -   │  TokUnperm  │    5    │  4.246ms  │
+│  PyTorch  │   Misc    │  -   │    Init     │    1    │  4.192us  │
 ├───────────┼───────────┼──────┼─────────────┼─────────┼───────────┤
-│           │           │      │    Total    │         │ 334.636ms │
+│           │           │      │    Total    │         │ 371.678ms │
 └───────────┴───────────┴──────┴─────────────┴─────────┴───────────┘
          Summary         
 ┏━━━━━━━━━━━┳━━━━━━━━━━━┓
 ┃ Category  ┃  Runtime  ┃
 ┡━━━━━━━━━━━╇━━━━━━━━━━━┩
-│  AttnFwd  │ 72.802ms  │
-│  AttnBwd  │ 251.530ms │
-│ MemoryOps │ 10.300ms  │
-│   Misc    │  4.128us  │
+│  AttnFwd  │ 72.305ms  │
+│  AttnBwd  │ 289.272ms │
+│ MemoryOps │ 10.097ms  │
+│   Misc    │  4.192us  │
 ├───────────┼───────────┤
-│   Total   │ 334.636ms │
+│   Total   │ 371.678ms │
 └───────────┴───────────┘

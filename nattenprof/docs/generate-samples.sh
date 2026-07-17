@@ -57,17 +57,17 @@ if [ "$TAG" = "h100" ]; then
 
     run "2d-flux-cudnn" sdpa -q 65536 -n 24 -d 128 --dtype bf16 --backend cudnn --bwd
 
-    # Hopper 2D tiles: fwd q=(16,8) kv=(16,8), bwd same
-    run "2d-flux-na-hopper-fna" na -i 256 256 -n 24 -d 128 -w 80 80 --dtype bf16 --backend $FNA_BACKEND --q-tile 16 8 --kv-tile 16 8 --backward-q-tile 16 8 --backward-kv-tile 16 8 --bwd
-    run "2d-flux-gna-hopper-fna" na -i 256 256 -n 24 -d 128 -w 80 80 -s 16 16 --dtype bf16 --backend $FNA_BACKEND --q-tile 16 8 --kv-tile 16 8 --backward-q-tile 16 8 --backward-kv-tile 16 8 --bwd
+    # Hopper 2D tiles: fwd q=(16,8) kv=(16,8), bwd q=(8,8) kv=(16,8)
+    run "2d-flux-na-hopper-fna" na -i 256 256 -n 24 -d 128 -w 80 80 --dtype bf16 --backend $FNA_BACKEND --q-tile 16 8 --kv-tile 16 8 --backward-q-tile 8 8 --backward-kv-tile 16 8 --bwd
+    run "2d-flux-gna-hopper-fna" na -i 256 256 -n 24 -d 128 -w 80 80 -s 16 16 --dtype bf16 --backend $FNA_BACKEND --q-tile 16 8 --kv-tile 16 8 --backward-q-tile 8 8 --backward-kv-tile 16 8 --bwd
 
     # --- 3D: Hunyuan (30x48x80, 24 heads) ---
 
     run "3d-hunyuan-cudnn" sdpa -q 115200 -n 24 -d 128 --dtype bf16 --backend cudnn --bwd
 
-    # Hopper 3D tiles: fwd q=(2,8,8) kv=(2,8,8), bwd same
-    run "3d-hunyuan-na-hopper-fna" na -i 30 48 80 -n 24 -d 128 -w 18 24 24 --dtype bf16 --backend $FNA_BACKEND --q-tile 2 8 8 --kv-tile 2 8 8 --backward-q-tile 2 8 8 --backward-kv-tile 2 8 8 --bwd
-    run "3d-hunyuan-gna-hopper-fna" na -i 30 48 80 -n 24 -d 128 -w 18 24 24 -s 16 8 8 --dtype bf16 --backend $FNA_BACKEND --q-tile 2 8 8 --kv-tile 2 8 8 --backward-q-tile 2 8 8 --backward-kv-tile 2 8 8 --bwd
+    # Hopper 3D tiles: fwd q=(2,8,8) kv=(2,8,8), bwd q=(1,8,8) kv=(2,8,8)
+    run "3d-hunyuan-na-hopper-fna" na -i 30 48 80 -n 24 -d 128 -w 18 24 24 --dtype bf16 --backend $FNA_BACKEND --q-tile 2 8 8 --kv-tile 2 8 8 --backward-q-tile 1 8 8 --backward-kv-tile 2 8 8 --bwd
+    run "3d-hunyuan-gna-hopper-fna" na -i 30 48 80 -n 24 -d 128 -w 18 24 24 -s 16 8 8 --dtype bf16 --backend $FNA_BACKEND --q-tile 2 8 8 --kv-tile 2 8 8 --backward-q-tile 1 8 8 --backward-kv-tile 2 8 8 --bwd
 
     # --- NATTEN attention (FMHA) ---
     run "attn-hopper-fmha" attn -q 1024 -d 128 --dtype bf16 --backend $FMHA_BACKEND --bwd

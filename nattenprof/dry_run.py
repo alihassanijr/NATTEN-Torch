@@ -23,29 +23,30 @@
 
 """Config enumeration (dry-run) and optimize search.
 
-This module creates temporary tensors for backend compatibility checks and config
-enumeration. These are short-lived and not part of the TensorPool system.
+High-level entry points (`_dry_run_na`, `_dry_run_attn`, `_optimize_na`,
+`_optimize_attn`) are called by Problem methods (NAProblem.dry_run /
+AttnProblem.dry_run / etc.). All perf knobs come off the Problem.
 """
 
 import math
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 
 from nattenprof.output import print_table, progress_bar
-from nattenprof.problem import AttentionProblem, NAProblem
+from nattenprof.problem import AttnProblem, NAProblem
 
 # ---- Temp tensor helpers ----
 
 
-def _make_temp_tensors(problem, heads_last=True):
-    """Create minimal temporary tensors for config enumeration."""
-    shapes = (
-        problem.get_tensor_shapes(heads_last=heads_last)
-        if isinstance(problem, AttentionProblem)
-        else problem.get_tensor_shapes()
-    )
+def _make_temp_tensors(problem):
+    """Minimal temporary tensors for natten's backend compatibility helpers.
+
+    Uses problem.get_tensor_shapes(), which already respects problem.heads_last.
+    Short-lived; not part of the TensorPool.
+    """
+    shapes = problem.get_tensor_shapes()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     safe_dtype = problem.dtype
@@ -83,49 +84,92 @@ def _flatten_configs(configs, keys) -> List[Dict[str, Any]]:
     return result
 
 
+# Per-backend dispatch: natten.backends function names + config key schemas.
+# FNA tiles are shape tuples ("*_tile_shape"); FMHA tiles are scalar sizes
+# ("*_tile_size"). See _get_fna_configs vs _get_fmha_configs for the key diff.
+_FNA_SPECS: Dict[str, Dict[str, Any]] = {
+    "cutlass-fna": {
+        "fwd_fn": "get_configs_for_cutlass_fna",
+        "bwd_fn": "get_bwd_configs_for_cutlass_fna",
+        "fwd_keys": ("q_tile_shape", "kv_tile_shape"),
+        "bwd_keys": ("backward_q_tile_shape", "backward_kv_tile_shape"),
+    },
+    "hopper-fna": {
+        "fwd_fn": "get_configs_for_cutlass_hopper_fna",
+        "bwd_fn": "get_bwd_configs_for_cutlass_hopper_fna",
+        "fwd_keys": (("q_tile_shape", "kv_tile_shape"), "kernel_schedule"),
+        "bwd_keys": ("backward_q_tile_shape", "backward_kv_tile_shape"),
+    },
+    "blackwell-fna": {
+        "fwd_fn": "get_configs_for_cutlass_blackwell_fna",
+        "bwd_fn": "get_bwd_configs_for_cutlass_blackwell_fna",
+        "fwd_keys": ("q_tile_shape", "kv_tile_shape"),
+        "bwd_keys": ("backward_q_tile_shape", "backward_kv_tile_shape"),
+    },
+    "flex-fna": {
+        "fwd_fn": "get_configs_for_flex_fna",
+        "bwd_fn": None,
+        "fwd_keys": ("q_tile_shape", "kv_tile_shape"),
+        "bwd_keys": (),
+    },
+}
+
+_FMHA_SPECS: Dict[str, Dict[str, Any]] = {
+    "cutlass-fmha": {
+        "fwd_fn": "get_configs_for_cutlass_fmha",
+        "bwd_fn": "get_bwd_configs_for_cutlass_fmha",
+        "fwd_keys": ("q_tile_size", "kv_tile_size"),
+        "bwd_keys": ("backward_q_tile_size", "backward_kv_tile_size"),
+    },
+    "hopper-fmha": {
+        "fwd_fn": "get_configs_for_cutlass_hopper_fmha",
+        "bwd_fn": "get_bwd_configs_for_cutlass_hopper_fmha",
+        "fwd_keys": (("q_tile_size", "kv_tile_size"), "kernel_schedule"),
+        "bwd_keys": ("backward_q_tile_size", "backward_kv_tile_size"),
+    },
+    "blackwell-fmha": {
+        "fwd_fn": "get_configs_for_cutlass_blackwell_fmha",
+        "bwd_fn": "get_bwd_configs_for_cutlass_blackwell_fmha",
+        "fwd_keys": ("q_tile_size", "kv_tile_size"),
+        "bwd_keys": ("backward_q_tile_size", "backward_kv_tile_size"),
+    },
+    "flex-fmha": {
+        "fwd_fn": "get_configs_for_flex_fmha",
+        "bwd_fn": None,
+        "fwd_keys": ("q_tile_size", "kv_tile_size"),
+        "bwd_keys": (),
+    },
+}
+
+
+# Keys used to carry tiles through optimize search + apply. These match both
+# natten's config-dict keys (what the search returns) and PerfConfig field names.
+_FNA_FWD_KEYS = ("q_tile_shape", "kv_tile_shape")
+_FNA_BWD_KEYS = ("backward_q_tile_shape", "backward_kv_tile_shape")
+_FMHA_FWD_KEYS = ("q_tile_size", "kv_tile_size")
+_FMHA_BWD_KEYS = ("backward_q_tile_size", "backward_kv_tile_size")
+
+
+def _get_configs(
+    specs: Dict[str, Dict[str, Any]], family: str, backend: str, q, k, v
+) -> Tuple[List[Dict], List[Dict]]:
+    import natten.backends as nb
+
+    if backend not in specs:
+        raise ValueError(f"Unsupported {family} backend: {backend}")
+    spec = specs[backend]
+
+    fwd_raw = getattr(nb, spec["fwd_fn"])(q, k, v)
+    bwd_raw = getattr(nb, spec["bwd_fn"])(q, k, v) if spec["bwd_fn"] else []
+
+    fwd = _flatten_configs(fwd_raw, spec["fwd_keys"]) if fwd_raw else []
+    bwd = _flatten_configs(bwd_raw, spec["bwd_keys"]) if bwd_raw else []
+    return fwd, bwd
+
+
 def _get_fna_configs(backend: str, q, k, v) -> Tuple[List[Dict], List[Dict]]:
-    """Get flattened fwd and bwd configs for an FNA backend."""
-    from natten.backends import (
-        get_bwd_configs_for_cutlass_blackwell_fna,
-        get_bwd_configs_for_cutlass_fna,
-        get_bwd_configs_for_cutlass_hopper_fna,
-        get_configs_for_cutlass_blackwell_fna,
-        get_configs_for_cutlass_fna,
-        get_configs_for_cutlass_hopper_fna,
-        get_configs_for_flex_fna,
-    )
-
-    if backend == "cutlass-fna":
-        fwd_raw = get_configs_for_cutlass_fna(q, k, v)
-        bwd_raw = get_bwd_configs_for_cutlass_fna(q, k, v)
-        fwd_keys = ("q_tile_shape", "kv_tile_shape")
-        bwd_keys = ("backward_q_tile_shape", "backward_kv_tile_shape")
-
-    elif backend == "hopper-fna":
-        fwd_raw = get_configs_for_cutlass_hopper_fna(q, k, v)
-        bwd_raw = get_bwd_configs_for_cutlass_hopper_fna(q, k, v)
-        fwd_keys = (("q_tile_shape", "kv_tile_shape"), "kernel_schedule")
-        bwd_keys = ("backward_q_tile_shape", "backward_kv_tile_shape")
-
-    elif backend == "blackwell-fna":
-        fwd_raw = get_configs_for_cutlass_blackwell_fna(q, k, v)
-        bwd_raw = get_bwd_configs_for_cutlass_blackwell_fna(q, k, v)
-        fwd_keys = ("q_tile_shape", "kv_tile_shape")
-        bwd_keys = ("backward_q_tile_shape", "backward_kv_tile_shape")
-
-    elif backend == "flex-fna":
-        fwd_raw = get_configs_for_flex_fna(q, k, v)
-        bwd_raw = []
-        fwd_keys = ("q_tile_shape", "kv_tile_shape")
-        bwd_keys = ()
-
-    else:
-        raise ValueError(f"Unsupported FNA backend: {backend}")
-
-    fwd = _flatten_configs(fwd_raw, fwd_keys) if fwd_raw else []
-    bwd = _flatten_configs(bwd_raw, bwd_keys) if bwd_raw else []
-
-    # Add q_tile_size / kv_tile_size for compatibility with measure functions
+    fwd, bwd = _get_configs(_FNA_SPECS, "FNA", backend, q, k, v)
+    # FNA emits shape tuples; derive scalar tile_size for downstream consumers.
     for cfg in fwd:
         if "q_tile_shape" in cfg:
             cfg["q_tile_size"] = math.prod(cfg["q_tile_shape"])
@@ -136,452 +180,325 @@ def _get_fna_configs(backend: str, q, k, v) -> Tuple[List[Dict], List[Dict]]:
             cfg["backward_q_tile_size"] = math.prod(cfg["backward_q_tile_shape"])
         if "backward_kv_tile_shape" in cfg:
             cfg["backward_kv_tile_size"] = math.prod(cfg["backward_kv_tile_shape"])
-
     return fwd, bwd
 
 
 def _get_fmha_configs(backend: str, q, k, v) -> Tuple[List[Dict], List[Dict]]:
-    """Get flattened fwd and bwd configs for an FMHA backend."""
-    from natten.backends import (
-        get_bwd_configs_for_cutlass_blackwell_fmha,
-        get_bwd_configs_for_cutlass_fmha,
-        get_bwd_configs_for_cutlass_hopper_fmha,
-        get_configs_for_cutlass_blackwell_fmha,
-        get_configs_for_cutlass_fmha,
-        get_configs_for_cutlass_hopper_fmha,
-        get_configs_for_flex_fmha,
-    )
-
-    if backend == "cutlass-fmha":
-        fwd_raw = get_configs_for_cutlass_fmha(q, k, v)
-        bwd_raw = get_bwd_configs_for_cutlass_fmha(q, k, v)
-        fwd_keys = ("q_tile_size", "kv_tile_size")
-        bwd_keys = ("backward_q_tile_size", "backward_kv_tile_size")
-
-    elif backend == "hopper-fmha":
-        fwd_raw = get_configs_for_cutlass_hopper_fmha(q, k, v)
-        bwd_raw = get_bwd_configs_for_cutlass_hopper_fmha(q, k, v)
-        fwd_keys = (("q_tile_size", "kv_tile_size"), "kernel_schedule")
-        bwd_keys = ("backward_q_tile_shape", "backward_kv_tile_shape")
-
-    elif backend == "blackwell-fmha":
-        fwd_raw = get_configs_for_cutlass_blackwell_fmha(q, k, v)
-        bwd_raw = get_bwd_configs_for_cutlass_blackwell_fmha(q, k, v)
-        fwd_keys = ("q_tile_size", "kv_tile_size")
-        bwd_keys = ("backward_q_tile_size", "backward_kv_tile_size")
-
-    elif backend == "flex-fmha":
-        fwd_raw = get_configs_for_flex_fmha(q, k, v)
-        bwd_raw = []
-        fwd_keys = ("q_tile_size", "kv_tile_size")
-        bwd_keys = ()
-
-    else:
-        raise ValueError(f"Unsupported FMHA backend: {backend}")
-
-    fwd = _flatten_configs(fwd_raw, fwd_keys) if fwd_raw else []
-    bwd = _flatten_configs(bwd_raw, bwd_keys) if bwd_raw else []
-    return fwd, bwd
+    return _get_configs(_FMHA_SPECS, "FMHA", backend, q, k, v)
 
 
-# ---- Display helpers ----
+# ---- Display ----
 
 
 def _display_configs(title, configs, max_configs):
-    """Print config dicts as a table."""
     if not configs:
         return
-
     headers = list(configs[0].keys())
     values = [[str(v) for v in cfg.values()] for cfg in configs]
-
     if max_configs > 0 and len(values) > max_configs:
         values = values[:max_configs]
         values.append(["..." for _ in headers])
-
     print_table(title, headers, values, has_footer=False)
 
 
-# ---- Dry-run (NA) ----
+# ---- Dry-run impls (called from Problem.dry_run) ----
 
 
-def dry_run_na(
-    problem: NAProblem,
-    backend: Optional[str],
-    fmha_backend: Optional[str],
-    backprop: bool,
-    torch_compile: bool,
-    max_configs: int,
-):
-    """Display available configs for NA backends."""
+def _dry_run_na(problem: NAProblem, max_configs: int) -> None:
     from natten.backends import get_compatible_backends, get_compatible_fmha_backends
 
     q, k, v = _make_temp_tensors(problem)
+    perf = problem.perf
 
-    if problem.is_self_attn:
+    if problem.is_self_attn():
         q_flat = q.flatten(1, problem.na_dim)
         k_flat = k.flatten(1, problem.na_dim)
         v_flat = v.flatten(1, problem.na_dim)
 
-        if fmha_backend is None:
-            fmha_backends = get_compatible_fmha_backends(
+        fmha_backends = (
+            [perf.fmha_backend]
+            if perf.fmha_backend is not None
+            else get_compatible_fmha_backends(
                 q_flat,
                 k_flat,
                 v_flat,
-                torch_compile=torch_compile,
+                torch_compile=perf.torch_compile,
                 is_causal=False,
                 is_varlen=False,
             )
-        else:
-            fmha_backends = [fmha_backend]
-
+        )
         for fb in fmha_backends:
             print(f"Use case is compatible with backend {fb}.")
             fwd, bwd = _get_fmha_configs(fb, q_flat, k_flat, v_flat)
             if fwd:
                 _display_configs(
-                    f"Backend: {fb}\nForward pass configurations",
-                    fwd,
-                    max_configs,
+                    f"Backend: {fb}\nForward pass configurations", fwd, max_configs
                 )
-            if backprop and bwd:
+            if problem.bwd and bwd:
                 _display_configs(
-                    f"Backend: {fb}\nBackward pass configurations",
-                    bwd,
-                    max_configs,
+                    f"Backend: {fb}\nBackward pass configurations", bwd, max_configs
                 )
-    else:
-        if backend is None:
-            backends = get_compatible_backends(q, k, v, torch_compile=torch_compile)
-        else:
-            backends = [backend]
+        return
 
-        for b in backends:
-            print(f"Use case is compatible with backend {b}.")
-            fwd, bwd = _get_fna_configs(b, q, k, v)
-            if fwd:
-                _display_configs(
-                    f"Backend: {b}\nForward pass configurations",
-                    fwd,
-                    max_configs,
-                )
-            if backprop and bwd:
-                _display_configs(
-                    f"Backend: {b}\nBackward pass configurations",
-                    bwd,
-                    max_configs,
-                )
+    backends = (
+        [perf.fna_backend]
+        if perf.fna_backend is not None
+        else get_compatible_backends(q, k, v, torch_compile=perf.torch_compile)
+    )
+    for b in backends:
+        print(f"Use case is compatible with backend {b}.")
+        fwd, bwd = _get_fna_configs(b, q, k, v)
+        if fwd:
+            _display_configs(
+                f"Backend: {b}\nForward pass configurations", fwd, max_configs
+            )
+        if problem.bwd and bwd:
+            _display_configs(
+                f"Backend: {b}\nBackward pass configurations", bwd, max_configs
+            )
 
 
-# ---- Dry-run (attn) ----
-
-
-def dry_run_attn(
-    problem: AttentionProblem,
-    backend: Optional[str],
-    backprop: bool,
-    torch_compile: bool,
-    max_configs: int,
-):
-    """Display available configs for FMHA backends."""
+def _dry_run_attn(problem: AttnProblem, max_configs: int) -> None:
     from natten.backends import get_compatible_fmha_backends
 
-    q, k, v = _make_temp_tensors(problem, heads_last=True)
+    q, k, v = _make_temp_tensors(problem)
+    perf = problem.perf
 
-    if backend is None:
-        backends = get_compatible_fmha_backends(
+    backends = (
+        [perf.fmha_backend]
+        if perf.fmha_backend is not None
+        else get_compatible_fmha_backends(
             q,
             k,
             v,
-            torch_compile=torch_compile,
+            torch_compile=perf.torch_compile,
             is_causal=problem.is_causal,
             is_varlen=problem.is_varlen,
         )
-    else:
-        backends = [backend]
-
+    )
     for b in backends:
         print(f"Use case is compatible with backend {b}.")
         fwd, bwd = _get_fmha_configs(b, q, k, v)
         if fwd:
             _display_configs(
-                f"Backend: {b}\nForward pass configurations",
-                fwd,
-                max_configs,
+                f"Backend: {b}\nForward pass configurations", fwd, max_configs
             )
-        if backprop and bwd:
+        if problem.bwd and bwd:
             _display_configs(
-                f"Backend: {b}\nBackward pass configurations",
-                bwd,
-                max_configs,
+                f"Backend: {b}\nBackward pass configurations", bwd, max_configs
             )
 
 
-# ---- Optimize ----
+# ---- Optimize impls (called from Problem.optimize) ----
 
 
-def _find_na_configs(
-    problem: NAProblem,
-    backend: Optional[str],
-    fmha_backend: Optional[str],
-    backprop: bool,
-    torch_compile: bool,
-) -> Tuple[str, Optional[str], List[Dict], List[Dict]]:
-    """Find backend + all configs for an NA problem. Returns (backend, fmha_backend, fwd, bwd)."""
-    from natten.backends import choose_backend, choose_fmha_backend
-
-    q, k, v = _make_temp_tensors(problem)
-
-    if problem.is_self_attn:
-        q_flat = q.flatten(1, problem.na_dim)
-        k_flat = k.flatten(1, problem.na_dim)
-        v_flat = v.flatten(1, problem.na_dim)
-        resolved_fmha = fmha_backend or choose_fmha_backend(
-            q_flat,
-            k_flat,
-            v_flat,
-            torch_compile=torch_compile,
-            is_causal=False,
-            is_varlen=False,
-        )
-        fwd, bwd = _get_fmha_configs(resolved_fmha, q_flat, k_flat, v_flat)
-        resolved_backend = backend or choose_backend(
-            q, k, v, torch_compile=torch_compile
-        )
-        return resolved_backend, resolved_fmha, fwd, bwd
-    else:
-        resolved_backend = backend or choose_backend(
-            q, k, v, torch_compile=torch_compile
-        )
-        fwd, bwd = _get_fna_configs(resolved_backend, q, k, v)
-        resolved_fmha = fmha_backend
-        return resolved_backend, resolved_fmha, fwd, bwd
-
-
-def _find_attn_configs(
-    problem: AttentionProblem,
-    backend: Optional[str],
-    backprop: bool,
-    torch_compile: bool,
-) -> Tuple[str, List[Dict], List[Dict]]:
-    """Find backend + all configs for an attention problem."""
-    from natten.backends import choose_fmha_backend
-
-    q, k, v = _make_temp_tensors(problem, heads_last=True)
-    resolved = backend or choose_fmha_backend(
-        q,
-        k,
-        v,
-        torch_compile=torch_compile,
-        is_causal=problem.is_causal,
-        is_varlen=problem.is_varlen,
-    )
-    fwd, bwd = _get_fmha_configs(resolved, q, k, v)
-    return resolved, fwd, bwd
-
-
-def _run_optimize_loop(
-    configs: List[Dict],
-    measure_fn,
-    warmup_steps: int,
-) -> Tuple[Dict, str]:
-    """Search configs, return (best_config, best_time_str)."""
+def _run_optimize_loop(configs, measure_fn, warmup_steps):
     best_time = None
     best_config = None
     best_time_str = None
-
     for cfg in progress_bar(configs, total=len(configs)):
         runtime_ms = measure_fn(cfg, warmup_steps)
         runtime_str = f"{runtime_ms:.2f} ms"
-
         if best_time is None or runtime_ms < best_time:
             best_time = runtime_ms
             best_config = cfg
             best_time_str = runtime_str
-
-    assert best_config is not None
-    assert best_time_str is not None
+    assert best_config is not None and best_time_str is not None
     return best_config, best_time_str
 
 
-def optimize_na(
-    problem: NAProblem,
-    backend: Optional[str],
-    fmha_backend: Optional[str],
-    backprop: bool,
-    persistent: bool,
-    schedule: Optional[str],
-    torch_compile: bool,
-    warmup_steps: int,
-    init_mode_str: str,
-    memory_limit: float,
-    seed: int,
-) -> Dict[str, Any]:
-    """Run optimize for NA. Returns best config dict."""
+def _make_pool(problem, settings, requires_grad: bool):
+    from nattenprof.tensors import InitMode, TensorPool
+
+    return TensorPool(
+        shapes=problem.get_tensor_shapes(),
+        dtype=problem.dtype,
+        device=torch.device("cuda"),
+        init_mode=InitMode(settings.init_mode),
+        memory_limit_gb=settings.memory_limit,
+        seed=settings.seed,
+        requires_grad=requires_grad,
+    )
+
+
+def _run_search_apply(
+    problem, settings, fwd_configs, bwd_configs, make_measure, fwd_keys, bwd_keys
+) -> None:
+    """Run fwd/optional bwd search loops and apply best-of to problem.perf.
+
+    `fwd_keys` / `bwd_keys` are tuples of perf field names that also appear as
+    keys in the cfg dicts (matching natten's parameter names). The assignment is
+    a silent no-op if a given key isn't in the best cfg.
+    """
+    perf = problem.perf
+
+    print()
+    print(f"Searching {len(fwd_configs)} forward pass configs")
+    best_fwd, _ = _run_optimize_loop(
+        fwd_configs, make_measure(run_backprop=False), settings.warmup_steps
+    )
+    for k in fwd_keys:
+        if k in best_fwd:
+            setattr(perf, k, best_fwd[k])
+    if "kernel_schedule" in best_fwd:
+        perf.kernel_schedule = best_fwd["kernel_schedule"]
+
+    if problem.bwd and bwd_configs:
+        print()
+        print(f"Searching {len(bwd_configs)} backward pass configs")
+        best_bwd, _ = _run_optimize_loop(
+            bwd_configs, make_measure(run_backprop=True), settings.warmup_steps
+        )
+        for k in bwd_keys:
+            if k in best_bwd:
+                setattr(perf, k, best_bwd[k])
+
+    _print_best(problem)
+
+
+def _optimize_na(problem: NAProblem, settings) -> None:
+    """Search configs; mutate problem's backend / tiles / schedule in place."""
     from natten import set_memory_usage_preference, use_kv_parallelism_in_fused_na
+    from natten.backends import choose_backend, choose_fmha_backend
+
+    from nattenprof.engine import measure_wall_time_ms
+    from nattenprof.ops import run_na
 
     use_kv_parallelism_in_fused_na(True)
     set_memory_usage_preference("unrestricted")
 
-    resolved_backend, resolved_fmha, fwd_configs, bwd_configs = _find_na_configs(
-        problem,
-        backend=backend,
-        fmha_backend=fmha_backend,
-        backprop=backprop,
-        torch_compile=torch_compile,
-    )
+    q, k, v = _make_temp_tensors(problem)
+    perf = problem.perf
 
-    from nattenprof.engine import measure_wall_time_ms
-    from nattenprof.ops import run_na
-    from nattenprof.tensors import InitMode, TensorPool
-
-    def make_measure_fn(run_backprop: bool):
-        disable_backward = not run_backprop
-        torch.set_grad_enabled(not disable_backward)
-
-        pool = TensorPool(
-            shapes=problem.get_tensor_shapes(),
-            dtype=problem.dtype,
-            device=torch.device("cuda"),
-            init_mode=InitMode(init_mode_str),
-            memory_limit_gb=memory_limit,
-            seed=seed,
-            requires_grad=not disable_backward,
+    # Pick a concrete backend to drive the search (FNA or FMHA via self-attn path).
+    if problem.is_self_attn():
+        q_flat = q.flatten(1, problem.na_dim)
+        k_flat = k.flatten(1, problem.na_dim)
+        v_flat = v.flatten(1, problem.na_dim)
+        perf.fmha_backend = perf.fmha_backend or choose_fmha_backend(
+            q_flat,
+            k_flat,
+            v_flat,
+            torch_compile=perf.torch_compile,
+            is_causal=False,
+            is_varlen=False,
         )
+        fwd_configs, bwd_configs = _get_fmha_configs(
+            perf.fmha_backend, q_flat, k_flat, v_flat
+        )
+        fwd_keys, bwd_keys = _FMHA_FWD_KEYS, _FMHA_BWD_KEYS
+    else:
+        perf.fna_backend = perf.fna_backend or choose_backend(
+            q, k, v, torch_compile=perf.torch_compile
+        )
+        fwd_configs, bwd_configs = _get_fna_configs(perf.fna_backend, q, k, v)
+        fwd_keys, bwd_keys = _FNA_FWD_KEYS, _FNA_BWD_KEYS
+
+    torch.set_grad_enabled(problem.bwd)
+
+    def make_measure(run_backprop: bool):
+        pool = _make_pool(problem, settings, requires_grad=run_backprop)
 
         def measure(cfg: Dict, warmup: int) -> float:
             fn = partial(
                 run_na,
                 problem=problem,
-                backend=resolved_backend,
-                fmha_backend=resolved_fmha,
+                backend=perf.fna_backend,
+                fmha_backend=perf.fmha_backend,
                 q_tile_shape=cfg.get("q_tile_shape"),
                 kv_tile_shape=cfg.get("kv_tile_shape"),
                 backward_q_tile_shape=cfg.get("backward_q_tile_shape"),
                 backward_kv_tile_shape=cfg.get("backward_kv_tile_shape"),
-                run_persistent_kernel=persistent,
-                kernel_schedule=cfg.get("kernel_schedule", schedule),
-                torch_compile=torch_compile,
-                disable_backward=disable_backward,
+                q_tile_size=cfg.get("q_tile_size"),
+                kv_tile_size=cfg.get("kv_tile_size"),
+                backward_q_tile_size=cfg.get("backward_q_tile_size"),
+                backward_kv_tile_size=cfg.get("backward_kv_tile_size"),
+                run_persistent_kernel=perf.is_persistent,
+                kernel_schedule=cfg.get("kernel_schedule", perf.kernel_schedule),
+                torch_compile=perf.torch_compile,
+                disable_backward=not run_backprop,
             )
             return measure_wall_time_ms(pool, fn, warmup_steps=warmup)
 
         return measure
 
-    best_cfg: Dict[str, Any] = {
-        "backend": resolved_backend,
-        "fmha_backend": resolved_fmha,
-    }
-
-    print()
-    print(f"Searching {len(fwd_configs)} forward pass configs")
-    fwd_measure = make_measure_fn(run_backprop=False)
-    best_fwd, best_fwd_time = _run_optimize_loop(fwd_configs, fwd_measure, warmup_steps)
-    best_cfg.update(best_fwd)
-
-    if backprop and bwd_configs:
-        print()
-        print(f"Searching {len(bwd_configs)} backward pass configs")
-        bwd_measure = make_measure_fn(run_backprop=True)
-        best_bwd, best_bwd_time = _run_optimize_loop(
-            bwd_configs, bwd_measure, warmup_steps
-        )
-        best_cfg.update(best_bwd)
-
-    print()
-    print_table(
-        "Best configuration",
-        ["Parameter", "Value"],
-        [[k, str(v)] for k, v in best_cfg.items()],
-        has_footer=False,
+    _run_search_apply(
+        problem, settings, fwd_configs, bwd_configs, make_measure, fwd_keys, bwd_keys
     )
-    print()
-
-    return best_cfg
 
 
-def optimize_attn(
-    problem: AttentionProblem,
-    backend: Optional[str],
-    backprop: bool,
-    persistent: bool,
-    schedule: Optional[str],
-    torch_compile: bool,
-    warmup_steps: int,
-    init_mode_str: str,
-    memory_limit: float,
-    seed: int,
-) -> Dict[str, Any]:
-    """Run optimize for attention. Returns best config dict."""
-    resolved_backend, fwd_configs, bwd_configs = _find_attn_configs(
-        problem,
-        backend=backend,
-        backprop=backprop,
-        torch_compile=torch_compile,
-    )
+def _optimize_attn(problem: AttnProblem, settings) -> None:
+    """Search FMHA configs; mutate problem in place."""
+    from natten.backends import choose_fmha_backend
 
     from nattenprof.engine import measure_wall_time_ms
     from nattenprof.ops import run_attn
-    from nattenprof.tensors import InitMode, TensorPool
 
-    def make_measure_fn(run_backprop: bool):
-        disable_backward = not run_backprop
-        torch.set_grad_enabled(not disable_backward)
+    q, k, v = _make_temp_tensors(problem)
+    perf = problem.perf
+    perf.fmha_backend = perf.fmha_backend or choose_fmha_backend(
+        q,
+        k,
+        v,
+        torch_compile=perf.torch_compile,
+        is_causal=problem.is_causal,
+        is_varlen=problem.is_varlen,
+    )
+    fwd_configs, bwd_configs = _get_fmha_configs(perf.fmha_backend, q, k, v)
 
-        pool = TensorPool(
-            shapes=problem.get_tensor_shapes(heads_last=True),
-            dtype=problem.dtype,
-            device=torch.device("cuda"),
-            init_mode=InitMode(init_mode_str),
-            memory_limit_gb=memory_limit,
-            seed=seed,
-            requires_grad=not disable_backward,
-        )
+    torch.set_grad_enabled(problem.bwd)
+
+    def make_measure(run_backprop: bool):
+        pool = _make_pool(problem, settings, requires_grad=run_backprop)
 
         def measure(cfg: Dict, warmup: int) -> float:
             fn = partial(
                 run_attn,
                 problem=problem,
-                backend=resolved_backend,
+                backend=perf.fmha_backend,
                 q_tile_size=cfg.get("q_tile_size"),
                 kv_tile_size=cfg.get("kv_tile_size"),
                 backward_q_tile_size=cfg.get("backward_q_tile_size"),
                 backward_kv_tile_size=cfg.get("backward_kv_tile_size"),
-                run_persistent_kernel=persistent,
-                kernel_schedule=cfg.get("kernel_schedule", schedule),
-                torch_compile=torch_compile,
-                disable_backward=disable_backward,
+                run_persistent_kernel=perf.is_persistent,
+                kernel_schedule=cfg.get("kernel_schedule", perf.kernel_schedule),
+                torch_compile=perf.torch_compile,
+                disable_backward=not run_backprop,
             )
             return measure_wall_time_ms(pool, fn, warmup_steps=warmup)
 
         return measure
 
-    best_cfg: Dict[str, Any] = {
-        "backend": resolved_backend,
-    }
+    _run_search_apply(
+        problem,
+        settings,
+        fwd_configs,
+        bwd_configs,
+        make_measure,
+        _FMHA_FWD_KEYS,
+        _FMHA_BWD_KEYS,
+    )
 
-    print()
-    print(f"Searching {len(fwd_configs)} forward pass configs")
-    fwd_measure = make_measure_fn(run_backprop=False)
-    best_fwd, best_fwd_time = _run_optimize_loop(fwd_configs, fwd_measure, warmup_steps)
-    best_cfg.update(best_fwd)
 
-    if backprop and bwd_configs:
-        print()
-        print(f"Searching {len(bwd_configs)} backward pass configs")
-        bwd_measure = make_measure_fn(run_backprop=True)
-        best_bwd, best_bwd_time = _run_optimize_loop(
-            bwd_configs, bwd_measure, warmup_steps
-        )
-        best_cfg.update(best_bwd)
-
+def _print_best(problem) -> None:
+    perf = problem.perf
     print()
     print_table(
         "Best configuration",
         ["Parameter", "Value"],
-        [[k, str(v)] for k, v in best_cfg.items()],
+        [
+            ["fna_backend", str(perf.fna_backend)],
+            ["fmha_backend", str(perf.fmha_backend)],
+            ["q_tile_shape", str(perf.q_tile_shape)],
+            ["kv_tile_shape", str(perf.kv_tile_shape)],
+            ["backward_q_tile_shape", str(perf.backward_q_tile_shape)],
+            ["backward_kv_tile_shape", str(perf.backward_kv_tile_shape)],
+            ["q_tile_size", str(perf.q_tile_size)],
+            ["kv_tile_size", str(perf.kv_tile_size)],
+            ["backward_q_tile_size", str(perf.backward_q_tile_size)],
+            ["backward_kv_tile_size", str(perf.backward_kv_tile_size)],
+            ["kernel_schedule", str(perf.kernel_schedule)],
+        ],
         has_footer=False,
     )
     print()
-
-    return best_cfg

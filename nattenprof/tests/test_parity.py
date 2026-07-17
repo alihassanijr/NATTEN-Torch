@@ -57,32 +57,16 @@ from natten.profiling_utils.profiling import (
     _profile_fmha_with_torch,
     _profile_na_with_torch,
 )
-from natten.utils.device import get_device_cc
 from torch.profiler import profile as torch_profile, ProfilerActivity
 
 # --- New profiler ---
 from nattenprof.ops import run_attn, run_na, run_sdpa
-from nattenprof.problem import AttentionProblem, NAProblem
+from nattenprof.problem import AttnProblem, NAProblem
 from nattenprof.tensors import InitMode, TensorPool
+from nattenprof.tests._skipif import skip_no_blackwell, skip_no_cuda, skip_no_hopper
 from nattenprof.trace import KernelType
 
 HAS_CUDA = torch.cuda.is_available()
-skip_no_cuda = pytest.mark.skipif(not HAS_CUDA, reason="CUDA not available")
-
-
-def _get_cc() -> int:
-    return get_device_cc() if HAS_CUDA else 0
-
-
-skip_no_hopper = pytest.mark.skipif(
-    not HAS_CUDA or _get_cc() != 90,
-    reason="Hopper kernels require SM90",
-)
-
-skip_no_blackwell = pytest.mark.skipif(
-    not HAS_CUDA or _get_cc() not in (100, 103),
-    reason="Blackwell kernels require SM100 or SM103",
-)
 
 
 # -----------------------------------------------------------------------------
@@ -343,8 +327,8 @@ def _build_new_na(cfg: ParityConfig) -> NAProblem:
     )
 
 
-def _build_new_attn(cfg: ParityConfig) -> AttentionProblem:
-    return AttentionProblem(
+def _build_new_attn(cfg: ParityConfig) -> AttnProblem:
+    return AttnProblem(
         batch_size=cfg.batch_size,
         heads=cfg.heads,
         heads_kv=cfg.heads_kv,
@@ -434,7 +418,8 @@ def _build_new_run_fn(cfg: ParityConfig) -> Tuple[TensorPool, Callable]:
 
     if cfg.op == "sdpa":
         problem = _build_new_attn(cfg)
-        shapes = problem.get_tensor_shapes(heads_last=False)
+        problem.heads_last = False
+        shapes = problem.get_tensor_shapes()
         pool = TensorPool(
             shapes=shapes,
             dtype=problem.dtype,
@@ -454,7 +439,8 @@ def _build_new_run_fn(cfg: ParityConfig) -> Tuple[TensorPool, Callable]:
 
     if cfg.op == "attn":
         problem = _build_new_attn(cfg)
-        shapes = problem.get_tensor_shapes(heads_last=True)
+        problem.heads_last = True
+        shapes = problem.get_tensor_shapes()
         pool = TensorPool(
             shapes=shapes,
             dtype=problem.dtype,

@@ -23,7 +23,7 @@
 
 import math
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import torch
 from torch import Tensor
@@ -43,12 +43,11 @@ def _safe_dtype(dtype: torch.dtype) -> torch.dtype:
 
 
 def _compute_pool_size(
-    shapes: Dict[str, List[int]],
+    shapes: Dict[str, Tuple[int, ...]],
     dtype: torch.dtype,
     memory_limit_gb: float,
 ) -> int:
-    safe = _safe_dtype(dtype)
-    element_size = torch.tensor([], dtype=safe).element_size()
+    element_size = torch.tensor([], dtype=dtype).element_size()
     one_set_bytes = sum(math.prod(shape) * element_size for shape in shapes.values())
     one_set_gb = one_set_bytes / (1024**3)
 
@@ -68,7 +67,7 @@ class TensorPool:
 
     def __init__(
         self,
-        shapes: Dict[str, List[int]],
+        shapes: Dict[str, Tuple[int, ...]],
         dtype: torch.dtype,
         device: torch.device,
         init_mode: InitMode = InitMode.RANDN,
@@ -84,7 +83,7 @@ class TensorPool:
         self.requires_grad = requires_grad
         self._safe_dtype = _safe_dtype(dtype)
         self._needs_typecast = self._safe_dtype != dtype
-        self._pool_size = _compute_pool_size(shapes, dtype, memory_limit_gb)
+        self._pool_size = _compute_pool_size(shapes, self._safe_dtype, memory_limit_gb)
         self._pool: List[Dict[str, Tensor]] = []
         self._index = 0
         self._generate_tensors()
